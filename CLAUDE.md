@@ -18,7 +18,7 @@ targets; the essentials:
 | --- | --- |
 | Install deps | `uv sync` (add `--frozen` in CI/Docker) |
 | Run API (reload) | `make run` → http://localhost:8000/docs |
-| Full local stack | `make up` (Postgres + OTel Collector + API in Docker) |
+| Full local stack | `make up` (Postgres + OTel Collector + Prometheus + Grafana + API in Docker) |
 | Tests | `make test` — SQLite in-memory by default |
 | Tests against Postgres | `TEST_DATABASE_URL=postgresql+asyncpg://books:books@localhost:5432/books_test uv run pytest` |
 | One test | `uv run pytest tests/test_books.py::test_patch_updates_fields` |

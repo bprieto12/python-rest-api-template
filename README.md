@@ -14,7 +14,7 @@ holds ~24 mock books that stand in for one.
 | Observability      | OpenTelemetry metrics + traces (OTLP, console fallback) |
 | Packaging          | uv (`pyproject.toml` + `uv.lock`)                 |
 | Container          | Multi-stage `Dockerfile` (uv build layer)         |
-| Local infra        | `docker compose` (Postgres + OTel Collector + API)|
+| Local infra        | `docker compose` (Postgres + OTel Collector + Prometheus + Grafana + API) |
 | Orchestration      | Kubernetes manifests in [`k8s/`](k8s/) (Kustomize)|
 | CI/CD              | GitHub Actions ([`.github/workflows/`](.github/workflows/)) |
 | Cloud              | AWS — ECR for images, EKS for compute, OIDC for auth |
@@ -26,7 +26,13 @@ uv sync                      # create .venv from uv.lock
 cp .env.example .env         # optional; defaults already point at localhost PG
 
 # Option A — everything in Docker
-make up                      # db + collector + api on http://localhost:8000
+make up                      # db + collector + prometheus + grafana + api
+
+# then:
+#   http://localhost:8000/docs    API + Swagger UI
+#   http://localhost:3000         Grafana — "Books API — Overview" dashboard (no login)
+#   http://localhost:9090         Prometheus (try:  rate(http_server_duration_milliseconds_count[1m]) )
+#   http://localhost:8889/metrics collector's re-exported app metrics
 
 # Option B — Postgres in Docker, API on the host
 docker compose up -d db
