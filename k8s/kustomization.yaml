@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: books-api
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - secret.example.yaml   # replace with a real secret source per cluster
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+
+images:
+  - name: books-api
+    newName: 000000000000.dkr.ecr.us-east-1.amazonaws.com/books-api
+    newTag: latest   # CD patches this to the commit SHA

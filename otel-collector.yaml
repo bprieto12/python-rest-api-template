@@ -1,0 +1,31 @@
+# Minimal collector for local development: accept OTLP, log it, and expose
+# metrics for Prometheus to scrape on :8889. Swap the exporters for your real
+# backend (AWS X-Ray / CloudWatch / Amazon Managed Prometheus) in each cluster.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: normal
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, prometheus]
