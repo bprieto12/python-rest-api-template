@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.5.11"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Lint
+        run: |
+          uv run ruff format --check .
+          uv run ruff check --output-format=github .
+      - name: Type check
+        run: uv run mypy src
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: books
+          POSTGRES_PASSWORD: books
+          POSTGRES_DB: books_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U books -d books_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://books:books@localhost:5432/books_test
+      DATABASE_URL: postgresql+asyncpg://books:books@localhost:5432/books_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Alembic upgrade/downgrade round-trips
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+      - name: Tests
+        run: uv run pytest --cov --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: books-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the image
+        run: |
+          docker run -d --name api -p 8000:8000 \
+            -e OTEL_ENABLED=false \
+            -e DATABASE_URL=postgresql+asyncpg://x:x@127.0.0.1:5432/x \
+            books-api:ci
+          for i in $(seq 1 20); do
+            curl -fsS http://localhost:8000/healthz && break || sleep 1
+          done
+          curl -fsS http://localhost:8000/healthz
+          docker rm -f api
