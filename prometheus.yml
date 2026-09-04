@@ -1,0 +1,23 @@
+# Local dev Prometheus. Scrapes the OpenTelemetry Collector, which re-exports
+# every OTLP metric the API pushes to it.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Metrics forwarded by the collector's `prometheus` exporter (:8889).
+  # This is where books-api's OTLP metrics land — http.server.duration,
+  # books.writes, DB client metrics, etc.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  # The collector's own internal telemetry (pipeline throughput, refused spans).
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

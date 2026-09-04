@@ -18,8 +18,16 @@ exporters:
     verbosity: normal
   prometheus:
     endpoint: 0.0.0.0:8889
+    # Turn OTel resource attributes (service.name, deployment.environment, ...)
+    # into Prometheus labels so you can filter by them.
+    resource_to_telemetry_conversion:
+      enabled: true
 
 service:
+  telemetry:
+    metrics:
+      # Expose the collector's own metrics so Prometheus can scrape :8888.
+      address: 0.0.0.0:8888
   pipelines:
     traces:
       receivers: [otlp]

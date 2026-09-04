@@ -1,6 +1,9 @@
-# Local dev stack: Postgres + an OpenTelemetry Collector + the API.
+# Local dev stack: Postgres + OpenTelemetry Collector + Prometheus + Grafana + the API.
 #   docker compose up --build
 # The API waits for Postgres, runs migrations, seeds mock data, then serves on :8000.
+#   API      http://localhost:8000/docs
+#   Grafana  http://localhost:3000   (no login; "Books API — Overview" dashboard)
+#   Prom     http://localhost:9090
 
 services:
   db:
@@ -27,7 +30,38 @@ services:
     ports:
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
-      - "8889:8889"   # Prometheus scrape endpoint (collector-exported metrics)
+      - "8888:8888"   # collector's own internal metrics
+      - "8889:8889"   # Prometheus scrape endpoint (app metrics re-exported)
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "9090:9090"   # Prometheus UI — http://localhost:9090
+    depends_on:
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      # Local dev only: no login, everyone is admin.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "3000:3000"   # Grafana UI — http://localhost:3000 (dashboard: "Books API — Overview")
+    depends_on:
+      - prometheus
 
   api:
     build: .
@@ -51,3 +85,5 @@ services:
 
 volumes:
   pgdata:
+  promdata:
+  grafanadata:
