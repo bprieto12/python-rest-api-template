@@ -77,13 +77,17 @@ a Docker build with a `/healthz` smoke test, on every PR.
 
 `.github/workflows/cd.yml` runs on push to `main` / `v*` tags: assumes an AWS IAM
 role via **GitHub OIDC** (`secrets.AWS_DEPLOY_ROLE_ARN`), builds and pushes to
-**ECR** tagged with the commit SHA, then `kustomize edit set image` +
-`kubectl apply` against **EKS**. DB migrations run as an `initContainer` in
-`k8s/deployment.yaml` before the app container.
+**ECR** tagged with the commit SHA, registers a new `ecs/task-definition.json`
+revision, then runs `alembic upgrade head` as a one-off **ECS Fargate** task
+(`aws ecs run-task`, exit code checked) before calling
+`aws ecs update-service --force-new-deployment` and waiting for the rollout to
+stabilize. There is no init container on ECS — the migration task *is* the gate;
+the service update only happens if it exits 0.
 
-Per-account placeholders to fill before a real deploy: ECR registry in
-`k8s/kustomization.yaml`, IRSA role ARN in `k8s/serviceaccount.yaml`, host/cert
-in `k8s/ingress.yaml`, and a real secret source replacing `k8s/secret.example.yaml`.
+The cluster, VPC/subnets, ALB, and target group are assumed to already exist
+(`ecs/service-definition.json` is a one-time `aws ecs create-service` bootstrap,
+not something CD re-applies). Per-account placeholders and IAM role
+requirements are in `ecs/README.md`.
 
 ## Conventions
 
