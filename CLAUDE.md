@@ -84,10 +84,14 @@ revision, then runs `alembic upgrade head` as a one-off **ECS Fargate** task
 stabilize. There is no init container on ECS — the migration task *is* the gate;
 the service update only happens if it exits 0.
 
-The cluster, VPC/subnets, ALB, and target group are assumed to already exist
-(`ecs/service-definition.json` is a one-time `aws ecs create-service` bootstrap,
-not something CD re-applies). Per-account placeholders and IAM role
-requirements are in `ecs/README.md`.
+The cluster, VPC/subnets, and ALB are shared platform resources owned by the
+`infrastructure` repo (a sibling submodule, not part of this repo). This
+repo's `terraform/` owns the service-level pieces — the ECS service, target
+group, listener rule on the shared ALB, and one Route 53 record — created
+once via `terraform apply`, not something CD re-applies; CD only registers
+new task definition revisions and calls `update-service`. Per-account
+placeholders and IAM role requirements are in `ecs/README.md` and
+`terraform/README.md`.
 
 ## Conventions
 
