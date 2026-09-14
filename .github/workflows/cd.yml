@@ -17,8 +17,9 @@ permissions:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: books-api
-  EKS_CLUSTER: books-api
-  K8S_NAMESPACE: books-api
+  ECS_CLUSTER: books-api
+  ECS_SERVICE: books-api
+  ECS_CONTAINER_NAME: api
 
 jobs:
   build-and-push:
@@ -63,20 +64,44 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+      - name: Render task definition with the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ecs/task-definition.json
+          container-name: ${{ env.ECS_CONTAINER_NAME }}
+          image: ${{ needs.build-and-push.outputs.image }}
 
-      - name: Render manifests with the new image
-        working-directory: k8s
+      - name: Register the task definition revision
+        id: register
         run: |
-          curl -sLo /usr/local/bin/kustomize "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64" \
-            || (curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash && mv kustomize /usr/local/bin/)
-          chmod +x /usr/local/bin/kustomize
-          kustomize edit set image books-api=${{ needs.build-and-push.outputs.image }}
-          kustomize build . > /tmp/manifests.yaml
+          arn=$(aws ecs register-task-definition \
+            --cli-input-json "file://${{ steps.render.outputs.task-definition }}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
 
-      - name: Apply
-        run: kubectl apply -f /tmp/manifests.yaml
+      - name: Run "alembic upgrade head" as a one-off task
+        run: |
+          task_arn=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --launch-type FARGATE \
+            --task-definition "${{ steps.register.outputs.arn }}" \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ vars.ECS_SUBNETS }}],securityGroups=[${{ vars.ECS_SECURITY_GROUPS }}],assignPublicIp=DISABLED}" \
+            --overrides "{\"containerOverrides\":[{\"name\":\"$ECS_CONTAINER_NAME\",\"command\":[\"alembic\",\"upgrade\",\"head\"]}]}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Migration task: $task_arn"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+          exit_code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query "tasks[0].containers[?name=='$ECS_CONTAINER_NAME'].exitCode | [0]" --output text)
+          echo "Migration exit code: $exit_code"
+          test "$exit_code" = "0"
 
-      - name: Wait for rollout
-        run: kubectl -n "$K8S_NAMESPACE" rollout status deployment/books-api --timeout=180s
+      - name: Update the service and wait for it to stabilize
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "${{ steps.register.outputs.arn }}" \
+            --force-new-deployment
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"

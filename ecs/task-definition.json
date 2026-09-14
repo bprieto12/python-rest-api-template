@@ -1,0 +1,69 @@
+{
+  "family": "books-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::000000000000:role/books-api-execution",
+  "taskRoleArn": "arn:aws:iam::000000000000:role/books-api-task",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "000000000000.dkr.ecr.us-east-1.amazonaws.com/books-api:latest",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "dependsOn": [{ "containerName": "aws-otel-collector", "condition": "START" }],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "OTEL_ENABLED", "value": "true" },
+        { "name": "OTEL_SERVICE_NAME", "value": "books-api" },
+        { "name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": "http://localhost:4317" },
+        { "name": "OTEL_EXPORTER_OTLP_PROTOCOL", "value": "grpc" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:000000000000:secret:books-api/database-url"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://localhost:8000/healthz').status==200 else 1)\""
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/books-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api",
+          "awslogs-create-group": "true"
+        }
+      }
+    },
+    {
+      "name": "aws-otel-collector",
+      "image": "public.ecr.aws/aws-observability/aws-otel-collector:v0.42.0",
+      "essential": false,
+      "command": ["--config=/etc/ecs/ecs-cloudwatch-xray.yaml"],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/books-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "otel-collector",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

@@ -11,6 +11,6 @@ htmlcov
 .env
 *.md
 !README.md
-k8s
+ecs
 tests
 docs

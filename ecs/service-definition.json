@@ -1,0 +1,29 @@
+{
+  "cluster": "books-api",
+  "serviceName": "books-api",
+  "taskDefinition": "books-api",
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "desiredCount": 2,
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-EXAMPLE1", "subnet-EXAMPLE2"],
+      "securityGroups": ["sg-EXAMPLE"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/books-api/EXAMPLE",
+      "containerName": "api",
+      "containerPort": 8000
+    }
+  ],
+  "healthCheckGracePeriodSeconds": 30,
+  "deploymentConfiguration": {
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100,
+    "deploymentCircuitBreaker": { "enable": true, "rollback": true }
+  },
+  "enableExecuteCommand": true
+}

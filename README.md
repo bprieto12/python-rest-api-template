@@ -15,9 +15,9 @@ holds ~24 mock books that stand in for one.
 | Packaging          | uv (`pyproject.toml` + `uv.lock`)                 |
 | Container          | Multi-stage `Dockerfile` (uv build layer)         |
 | Local infra        | `docker compose` (Postgres + OTel Collector + Prometheus + Grafana + API) |
-| Orchestration      | Kubernetes manifests in [`k8s/`](k8s/) (Kustomize)|
+| Orchestration      | ECS Fargate, task/service defs in [`ecs/`](ecs/)  |
 | CI/CD              | GitHub Actions ([`.github/workflows/`](.github/workflows/)) |
-| Cloud              | AWS — ECR for images, EKS for compute, OIDC for auth |
+| Cloud              | AWS — ECR for images, ECS Fargate for compute, OIDC for auth |
 
 ## Quick start
 
@@ -68,7 +68,7 @@ src/books_api/
   seed_data.py    the mock catalogue
 alembic/          migration env + versions/
 scripts/seed.py   idempotent loader for the mock catalogue
-k8s/              Kustomize base (namespace, deploy, svc, ingress, hpa, ...)
+ecs/              Fargate task/service definitions (see ecs/README.md)
 tests/            pytest suite (httpx ASGI client)
 ```
 
@@ -77,11 +77,9 @@ tests/            pytest suite (httpx ASGI client)
 - **Images** are built and pushed to ECR by [`.github/workflows/cd.yml`](.github/workflows/cd.yml)
   on push to `main` / `v*` tags, tagged with the commit SHA.
 - **Auth** is GitHub OIDC → an IAM role (`secrets.AWS_DEPLOY_ROLE_ARN`); no static keys.
-- **Rollout** runs `kustomize edit set image` then `kubectl apply -k k8s/` against EKS.
-  Schema migrations run in an `initContainer` before the app container starts.
-- Placeholders to replace before first deploy: the ECR registry in
-  [`k8s/kustomization.yaml`](k8s/kustomization.yaml), the IRSA role ARN in
-  [`k8s/serviceaccount.yaml`](k8s/serviceaccount.yaml), the host/cert in
-  [`k8s/ingress.yaml`](k8s/ingress.yaml), and the real secret source (replace
-  [`k8s/secret.example.yaml`](k8s/secret.example.yaml) with External Secrets or
-  the Secrets Store CSI driver).
+- **Rollout** registers a new [`ecs/task-definition.json`](ecs/task-definition.json)
+  revision, runs `alembic upgrade head` as a one-off Fargate task and checks its
+  exit code, then `aws ecs update-service --force-new-deployment` and waits for
+  the service to stabilize. See [`ecs/README.md`](ecs/README.md) for the
+  one-time cluster/service bootstrap, IAM roles, and placeholders to fill in
+  before the first deploy.
