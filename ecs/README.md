@@ -2,7 +2,7 @@
 
 Fargate task definition + service for `books-api`. CD pushes images to ECR and
 updates these; the cluster, VPC/subnets, security groups, ALB, and target group
-are assumed to already exist — created once via Terraform/CDK/console/CLI,
+are assumed to already exist — owned by the shared `infrastructure` repo,
 outside this repo. That's the same boundary the Kubernetes manifests this
 replaced drew around the EKS cluster: infra that's provisioned once, versus the
 app-level config that changes on every deploy.
@@ -22,18 +22,20 @@ app-level config that changes on every deploy.
     CloudWatch) or point `AOT_CONFIG_CONTENT` at your own YAML if you need a
     different backend — the local `otel-collector.yaml` used by `docker compose`
     is a reasonable starting point.
-- **`service-definition.json`** — input to the **one-time**
-  `aws ecs create-service` bootstrap below. CD never touches networking or the
-  load balancer after that; it only registers new task definition revisions and
-  calls `update-service`.
+
+  This file is also the single source of truth for the container definitions
+  in [`../terraform/main.tf`](../terraform/main.tf) — Terraform reads it
+  to create the *first* task definition revision, so `apply` and CD agree on
+  shape. See `../terraform/README.md` for why Terraform stops tracking it
+  after that.
 
 ## One-time bootstrap (per environment)
 
-1. `aws ecs create-cluster --cluster-name books-api`
-2. Fill in `service-definition.json` — real subnets, security group, target
-   group ARN — then:
-   `aws ecs create-service --cli-input-json file://ecs/service-definition.json`
-3. Set the GitHub secret `AWS_DEPLOY_ROLE_ARN` and repo/environment variables
+The service, target group, listener rule, and Route 53 record are created by
+[`../terraform`](../terraform) — see its README for the full setup. Once
+that's applied:
+
+1. Set the GitHub secret `AWS_DEPLOY_ROLE_ARN` and repo/environment variables
    `ECS_SUBNETS` and `ECS_SECURITY_GROUPS` (comma-separated subnet/SG ids, no
    quotes) — the one-off migration task in CD needs its own network config
    since it isn't part of the service.

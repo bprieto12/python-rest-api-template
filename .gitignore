@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Terraform
+# (.terraform.lock.hcl is intentionally NOT ignored — commit it to pin provider versions)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/*.tfvars.example
+terraform/crash.log
+terraform/override.tf
+terraform/override.tf.json
