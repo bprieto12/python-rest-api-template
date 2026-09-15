@@ -1,6 +1,15 @@
 resource "aws_security_group" "alb" {
-  name        = "books-api-alb"
-  description = "books-api ALB - internal, reachable only via API Gateway's VPC Link."
+  # name_prefix, not name: `description` is ForceNew on this resource (any
+  # change recreates the whole security group, not just its rules) — paired
+  # with a fixed `name`, that replacement fails outright the moment anything
+  # else (the ALB itself, here) still references the old group while AWS
+  # hasn't yet released its ENI, since the new group can't be created under
+  # the same name until the old one is gone. name_prefix + CBD below lets
+  # the new group exist (under a generated name) before the old one is
+  # torn down, so a future description/rule change that forces replacement
+  # can't hit this same race.
+  name_prefix = "books-api-alb-"
+  description = "books-api ALB - internal, reachable only via API Gateway VPC Link."
   vpc_id      = aws_vpc.this.id
 
   egress {
@@ -11,6 +20,10 @@ resource "aws_security_group" "alb" {
   }
 
   tags = { Name = "books-api-alb" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_security_group" "ecs_tasks" {
@@ -70,5 +83,5 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc_link" {
   from_port                    = 443
   to_port                      = 443
   ip_protocol                  = "tcp"
-  description                  = "From API Gateway's VPC Link"
+  description                  = "From the API Gateway VPC Link"
 }
