@@ -18,6 +18,31 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class _QuietHealthChecks(logging.Filter):
+    """Drop uvicorn's access-log line for a *successful* /healthz or /readyz.
+
+    They're hit every ~30s, forever, by the ALB and container health checks
+    — once the deployment is stable those lines are pure noise. A failing
+    health check still logs normally (status is the last of uvicorn's five
+    %-args: client_addr, method, path, http_version, status — see
+    uvicorn.protocols.http.h11_impl's access_logger.info call) — that's the
+    one case actually worth seeing.
+    """
+
+    _quiet_paths = ("/healthz", "/readyz")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path, status = args[2], args[4]
+        is_quiet_path = any(path == p or str(path).startswith(f"{p}?") for p in self._quiet_paths)
+        return not (is_quiet_path and isinstance(status, int) and 200 <= status < 300)
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietHealthChecks())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
