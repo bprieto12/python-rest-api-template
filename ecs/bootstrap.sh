@@ -53,7 +53,25 @@ create_role_if_missing() {
 create_role_if_missing books-api-execution
 aws iam attach-role-policy --role-name books-api-execution \
   --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-echo "  books-api-execution: AmazonECSTaskExecutionRolePolicy"
+
+# AmazonECSTaskExecutionRolePolicy covers logs:CreateLogStream/PutLogEvents
+# but deliberately not logs:CreateLogGroup — task-definition.json sets
+# "awslogs-create-group": "true" for both containers, which needs it granted
+# explicitly, scoped to the one log group both containers share.
+LOGS_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "logs:CreateLogGroup",
+    "Resource": "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/books-api:*"
+  }]
+}
+EOF
+)
+aws iam put-role-policy --role-name books-api-execution \
+  --policy-name books-api-log-group --policy-document "$LOGS_POLICY"
+echo "  books-api-execution: AmazonECSTaskExecutionRolePolicy + logs:CreateLogGroup on /ecs/books-api"
 
 # --- IAM: task role (what the app/sidecar containers can call at runtime) --
 create_role_if_missing books-api-task
