@@ -101,7 +101,15 @@ def setup_telemetry(settings: Settings) -> None:
 
 def instrument_app(app: object) -> None:
     try:
-        FastAPIInstrumentor.instrument_app(app)  # type: ignore[arg-type]
+        # Health/readiness probes are hit every ~30s, forever, by the ALB and
+        # container health checks — excluding them here drops both the trace
+        # spans AND the http.server.* metrics for those paths (excluded_urls
+        # feeds the one middleware that emits both), not just one or the
+        # other. Unlike the uvicorn access-log filter in main.py, this
+        # excludes them unconditionally, failures included — a health check
+        # transitioning to unhealthy is already visible via ECS/ALB target
+        # health directly, without needing a dedicated trace for it.
+        FastAPIInstrumentor.instrument_app(app, excluded_urls="/healthz,/readyz")  # type: ignore[arg-type]
     except Exception:
         logger.debug("fastapi instrumentation skipped", exc_info=True)
 
