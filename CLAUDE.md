@@ -86,12 +86,16 @@ the rollout to stabilize. There's no migration step — DynamoDB is schemaless,
 so there's nothing for a migration task to do.
 
 `terraform/` owns everything that isn't re-applied on every deploy: a
-dedicated VPC, the ECS cluster, an ALB (with ACM cert and one Route 53
-record) built just for this service, the target group, the two DynamoDB
-tables, and the initial ECS service + task definition revision — created once
-via `terraform apply` (locally, or via `.github/workflows/terraform.yml`'s
+dedicated VPC, the ECS cluster, an *internal* ALB (with ACM cert), the target
+group, the two DynamoDB tables, Cognito (issues OAuth2 client-credentials
+tokens), API Gateway (the actual public entry point — a JWT authorizer checks
+every request against Cognito before it reaches the VPC Link -> ALB -> ECS,
+with one Route 53 record now aliasing API Gateway rather than the ALB
+directly), and the initial ECS service + task definition revision — created
+once via `terraform apply` (locally, or via `.github/workflows/terraform.yml`'s
 `workflow_dispatch`), not something CD re-applies; CD only registers new task
-definition revisions and calls `update-service`. Per-account placeholders and
+definition revisions and calls `update-service`. See `terraform/README.md`'s
+"Request path"/"Auth" sections for the full flow. Per-account placeholders and
 IAM role requirements are in `ecs/README.md` and `terraform/README.md`.
 
 ## Conventions

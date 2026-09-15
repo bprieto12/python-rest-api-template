@@ -1,12 +1,57 @@
 # Terraform — books-api
 
 Everything this service needs on AWS, in one place: a dedicated VPC, ECS
-cluster, ALB (with ACM cert and one DNS record), and the ECS task
-definition/service. Deliberately not split across a separate "platform" repo
-and a "service" repo — this is one small service with one deploy target, and
-that split earns its cost once there's a second service sharing
-infrastructure, not before. See `../CLAUDE.md`'s deploy pipeline section for
-how this fits with `../ecs/` and CD.
+cluster, an *internal* ALB, API Gateway (the actual public entry point) with
+Cognito-issued OAuth2 tokens enforced on every request, the two DynamoDB
+tables, and the ECS task definition/service. Deliberately not split across a
+separate "platform" repo and a "service" repo — this is one small service
+with one deploy target, and that split earns its cost once there's a second
+service sharing infrastructure, not before. See `../CLAUDE.md`'s deploy
+pipeline section for how this fits with `../ecs/` and CD.
+
+## Request path
+
+```
+caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --> ALB (internal) --> ECS
+```
+
+`api_gateway.tf` is the only public thing here. The ALB (`alb.tf`) is
+`internal = true` specifically so this can't be bypassed — there's no way to
+reach it except through the VPC Link, which only API Gateway can use.
+`cognito.tf` is the token issuer: machine-to-machine only (client-credentials
+grant), no hosted login UI, no human users. See "Auth" below for the actual
+flow a caller goes through.
+
+## Auth
+
+A caller does the OAuth2 client-credentials grant against the Cognito
+domain, then calls the API with the resulting bearer token.
+[`../scripts/get-token.sh`](../scripts/get-token.sh) wraps that grant —
+it reads the client id/secret/domain straight from `terraform output` and
+prints just the token, so it composes directly into a request:
+
+```bash
+curl -H "Authorization: Bearer $(../scripts/get-token.sh)" https://books-api.spixionic.com/api/v1/books
+
+# request a specific scope instead of the default (both read and write):
+../scripts/get-token.sh books-api/read
+```
+
+No local Terraform state (e.g. from CI, or a teammate's machine)? Set
+`COGNITO_CLIENT_ID`/`COGNITO_CLIENT_SECRET`/`COGNITO_DOMAIN` and the script
+uses those instead of calling `terraform output`.
+
+Tokens are scoped (`books-api/read`, `books-api/write` — `cognito.tf`'s
+resource server) but API Gateway's authorizer here only checks that the
+token is *valid*, not which scopes it carries — every valid token can call
+every route. Enforcing scopes per-route would mean either per-route
+authorizers in `api_gateway.tf` or checking `event.requestContext.authorizer.jwt.claims.scope`
+in the app itself; neither exists yet, both are natural next steps if
+different callers should have different access.
+
+The app itself (`src/books_api/`) has no idea any of this exists — enforcement
+is entirely at the gateway, so local dev (`make run`, `docker compose up`)
+stays exactly as unauthenticated as it's always been.
 
 ## Why Terraform only owns the *first* task definition revision
 
@@ -63,8 +108,9 @@ manages the one record for `domain_name`, never the zone itself.
 3. Copy `terraform.tfvars.example` → `terraform.tfvars`, set
    `hosted_zone_name` and `domain_name` for real.
 4. `terraform plan` and read it, then `terraform apply`. This creates the
-   VPC, cluster, ALB, cert, target group, and the initial ECS service + task
-   definition revision.
+   VPC, cluster, internal ALB, cert, target group, the two DynamoDB tables,
+   Cognito (user pool, domain, client), API Gateway (with its JWT authorizer
+   and VPC Link), and the initial ECS service + task definition revision.
 5. Set the GitHub OIDC deploy role ARN and `ECS_SUBNETS`/`ECS_SECURITY_GROUPS`
    (see [`../ecs/README.md`](../ecs/README.md)) from this apply's
    `aws_subnet.private[*].id` / `aws_security_group.ecs_tasks.id` — CD takes
@@ -118,7 +164,12 @@ role's — this is table lifecycle, not item access; see `ecs/README.md`),
 `PutRetentionPolicy` (also distinct from the execution role's
 `logs:CreateLogGroup` in `ecs/bootstrap.sh` — that one only lets the running
 task create the group if this apply hasn't already; this one is Terraform
-owning the group's retention policy),
+owning the group's retention policy), `cognito-idp:CreateUserPool` /
+`DeleteUserPool` / `CreateUserPoolDomain` / `DeleteUserPoolDomain` /
+`CreateUserPoolClient` / `DeleteUserPoolClient` / `CreateResourceServer` /
+`DeleteResourceServer`, `apigateway:*` (HTTP API, VPC Link, authorizer,
+route, stage, and custom domain — no finer-grained action set than the
+blanket one is commonly documented for API Gateway v2 resources),
 and `iam:PassRole` for the execution/task roles. Run `apply` from a separate,
 more privileged role than the one CD assumes — don't widen the deploy role
 just to let CI run Terraform too. In CI this is `secrets.TF_DEPLOY_ROLE_ARN`,

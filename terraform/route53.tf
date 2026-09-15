@@ -7,14 +7,17 @@ data "aws_route53_zone" "this" {
   name = var.hosted_zone_name
 }
 
+# Points at API Gateway now, not the ALB directly — the ALB is internal
+# (alb.tf) and unreachable from outside the VPC, so aliasing it here would
+# just be a dead record. API Gateway is the actual public entry point.
 resource "aws_route53_record" "this" {
   zone_id = data.aws_route53_zone.this.zone_id
   name    = var.domain_name
   type    = "A"
 
   alias {
-    name                   = aws_lb.this.dns_name
-    zone_id                = aws_lb.this.zone_id
-    evaluate_target_health = true
+    name                   = aws_apigatewayv2_domain_name.this.domain_name_configuration[0].target_domain_name
+    zone_id                = aws_apigatewayv2_domain_name.this.domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
   }
 }
