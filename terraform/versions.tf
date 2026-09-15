@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.7"
+  # >= 1.10 specifically for the S3 backend's native state locking
+  # (use_lockfile) — no DynamoDB table needed for locking as of that version.
+  required_version = ">= 1.10"
 
   required_providers {
     aws = {
@@ -8,9 +10,9 @@ terraform {
     }
   }
 
-  # Partial config on purpose — bucket/key/region/dynamodb_table are supplied
-  # per environment, e.g.:
-  #   terraform init -backend-config=environments/production.backend.hcl
+  # Partial config on purpose — bucket/key/region/use_lockfile are supplied
+  # at init time, e.g.:
+  #   terraform init -backend-config=backend.hcl
   backend "s3" {}
 }
 
@@ -23,4 +25,8 @@ provider "aws" {
       ManagedBy = "terraform"
     }
   }
+}
+
+data "aws_availability_zones" "available" {
+  state = "available"
 }

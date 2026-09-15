@@ -1,16 +1,14 @@
-# Scope: the ECS *service* for books-api — task definition, service, target
-# group, listener rule, and DNS record. The cluster, VPC, ALB, and hosted zone
-# are shared platform resources owned elsewhere (see the `infrastructure`
-# repo) and only referenced here by id/ARN via variables.
+# The ECS task definition (initial revision only) and service.
 #
 # `../ecs/task-definition.json` stays the single source of truth for the
-# container definitions *and* the execution/task roles, image, and container
+# container definitions and the execution/task roles, image, and container
 # port — the same file CD renders and registers on every deploy. Terraform
 # only reads it to create the *first* revision so `apply` and CD agree on
 # shape; `ignore_changes` below keeps Terraform from fighting every later
 # `register-task-definition` call CD makes on its own. Nothing here should
 # duplicate a value that's already in that file — update the JSON, not a
-# tfvars file, when e.g. the roles or port change.
+# tfvars file, when e.g. the roles or port change. See ../ecs/README.md for
+# the full CD-vs-Terraform ownership split.
 
 locals {
   task_definition = jsondecode(file("${path.module}/../ecs/task-definition.json"))
@@ -46,7 +44,7 @@ resource "aws_lb_target_group" "this" {
   name        = "books-api"
   port        = local.api_container.portMappings[0].containerPort
   protocol    = "HTTP"
-  vpc_id      = var.vpc_id
+  vpc_id      = aws_vpc.this.id
   target_type = "ip" # required for awsvpc-mode Fargate tasks
 
   health_check {
@@ -63,33 +61,17 @@ resource "aws_lb_target_group" "this" {
   deregistration_delay = 30
 }
 
-resource "aws_lb_listener_rule" "this" {
-  listener_arn = var.alb_listener_arn
-  priority     = var.listener_rule_priority
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.this.arn
-  }
-
-  condition {
-    host_header {
-      values = [var.domain_name]
-    }
-  }
-}
-
 resource "aws_ecs_service" "this" {
-  name              = local.task_definition.family
-  cluster           = var.cluster_name
-  task_definition   = aws_ecs_task_definition.this.arn
-  launch_type       = "FARGATE"
-  platform_version  = "LATEST"
-  desired_count     = var.desired_count
+  name             = local.task_definition.family
+  cluster          = aws_ecs_cluster.this.id
+  task_definition  = aws_ecs_task_definition.this.arn
+  launch_type      = "FARGATE"
+  platform_version = "LATEST"
+  desired_count    = var.desired_count
 
   network_configuration {
-    subnets          = var.subnet_ids
-    security_groups  = var.security_group_ids
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = false
   }
 
@@ -111,24 +93,12 @@ resource "aws_ecs_service" "this" {
 
   enable_execute_command = true
 
-  depends_on = [aws_lb_listener_rule.this]
+  depends_on = [aws_lb_listener.https]
 
   lifecycle {
     # CD owns rollouts (`register-task-definition` + `update-service
     # --force-new-deployment`) and scaling is managed outside this repo —
     # Terraform shouldn't revert either on the next apply.
     ignore_changes = [task_definition, desired_count]
-  }
-}
-
-resource "aws_route53_record" "this" {
-  zone_id = var.hosted_zone_id
-  name    = var.domain_name
-  type    = "A"
-
-  alias {
-    name                   = var.alb_dns_name
-    zone_id                = var.alb_zone_id
-    evaluate_target_health = true
   }
 }
