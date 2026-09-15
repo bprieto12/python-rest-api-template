@@ -114,6 +114,12 @@ manages the one record for `domain_name`, never the zone itself.
 
 ## One-time setup
 
+`../scripts/bootstrap.sh` does everything below — the state bucket, this
+`apply`, and the GitHub OIDC/secrets wiring `../ecs/README.md` and
+`.github/workflows/` need — in one command. What follows is what it's
+actually doing, for anyone customizing the process or debugging a step it
+got stuck on.
+
 1. The zone in `hosted_zone_name` must already exist in Route 53 (create it
    once via console/CLI if it doesn't, and delegate it at your registrar —
    that's the only manual DNS step; once the zone exists and is delegated,
