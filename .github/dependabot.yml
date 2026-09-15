@@ -1,0 +1,19 @@
+# Complements the pip-audit/Trivy scans in ci.yml, which only catch a known
+# vulnerability once one exists for something already pinned — this opens
+# PRs to bump versions proactively, vulnerability or not.
+version: 2
+updates:
+  - package-ecosystem: "uv" # if GitHub rejects "uv" as unrecognized, fall back to "pip" —
+    directory: "/" # it won't understand uv.lock as well, but still reads pyproject.toml
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

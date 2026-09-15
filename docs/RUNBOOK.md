@@ -54,6 +54,42 @@ as a data source (native support, no new AWS infrastructure needed) — see
 the note in `terraform/README.md` if you want to go further and replicate
 the local Prometheus/Grafana setup for real in AWS.
 
+### Alerting
+
+`terraform/alarms.tf` operationalizes a handful of SLOs as CloudWatch
+Alarms, all publishing to one SNS topic (`books-api-alerts`):
+
+| Alarm | SLO it enforces | Threshold |
+| --- | --- | --- |
+| `books-api-unhealthy-targets` | The service is actually up | Any ECS target unhealthy behind the ALB, for 3 straight minutes |
+| `books-api-gateway-5xx` | Availability | 5+ 5xx responses from API Gateway in a 5-minute window |
+| `books-api-gateway-latency-p99` | Latency | p99 integration latency above 3s for 15 straight minutes |
+| `books-api-dynamodb-throttles-{books,isbns}` | The data layer has headroom | Any throttled DynamoDB request in a 5-minute window |
+
+These are deliberately generous starting thresholds picked without a real
+traffic baseline to tune against (see `alarms.tf`'s comments for the
+reasoning on each) — tighten them once actual traffic gives you something
+to hold the service to. "5+ 5xx" and "p99 latency" specifically are simple
+counts/single-metric statistics rather than computed error rates, since this
+service doesn't have enough steady traffic yet for a percentage-based
+threshold to mean much; revisit as metric-math expressions once it does.
+
+**Nothing is subscribed to the alerts topic by default** — an email address
+or webhook isn't something this repo creates or stores on your behalf.
+Subscribe yourself, once:
+
+```bash
+aws sns subscribe --topic-arn "$(terraform output -raw alerts_topic_arn)" \
+  --protocol email --notification-endpoint you@example.com
+```
+
+AWS emails a confirmation link to that address — nothing arrives until you
+click it. (Slack/PagerDuty/etc. instead of email: subscribe an SNS→webhook
+integration the same way, just a different `--protocol`/endpoint.)
+
+To see alarm history/current state: CloudWatch → Alarms — or
+`aws cloudwatch describe-alarms --alarm-name-prefix books-api`.
+
 ### How to view logs
 
 Container logs go to CloudWatch Logs, log group **`/ecs/books-api`**, two

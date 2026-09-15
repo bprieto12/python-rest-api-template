@@ -181,7 +181,9 @@ Applying this needs a broader role than CD's OIDC deploy role — at minimum
 `CreateService` / `UpdateService` / `DescribeServices` /
 `PutClusterCapacityProviders`, `acm:RequestCertificate` /
 `DescribeCertificate`, `route53:GetHostedZone` / `ChangeResourceRecordSets`,
-`dynamodb:CreateTable` / `DeleteTable` / `DescribeTable` / `UpdateTable`
+`dynamodb:CreateTable` / `DeleteTable` / `DescribeTable` / `UpdateTable` /
+`UpdateContinuousBackups` (point-in-time recovery is a distinct API call
+from the table update itself)
 (note: this is a *different* set of DynamoDB permissions than the task
 role's — this is table lifecycle, not item access; see `ecs/README.md`),
 `logs:CreateLogGroup` / `DeleteLogGroup` / `DescribeLogGroups` /
@@ -194,6 +196,8 @@ owning the group's retention policy), `cognito-idp:CreateUserPool` /
 `DeleteResourceServer`, `apigateway:*` (HTTP API, VPC Link, authorizer,
 route, stage, and custom domain — no finer-grained action set than the
 blanket one is commonly documented for API Gateway v2 resources),
+`sns:CreateTopic` / `DeleteTopic` / `GetTopicAttributes`,
+`cloudwatch:PutMetricAlarm` / `DeleteAlarms` / `DescribeAlarms`,
 and `iam:PassRole` for the execution/task roles. Run `apply` from a separate,
 more privileged role than the one CD assumes — don't widen the deploy role
 just to let CI run Terraform too. In CI this is `secrets.TF_DEPLOY_ROLE_ARN`,

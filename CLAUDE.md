@@ -76,7 +76,11 @@ client. See `tests/conftest.py`.
 ## Deploy pipeline
 
 `.github/workflows/ci.yml` runs lint + mypy + tests (fully hermetic — no
-service containers) + a Docker build with a `/healthz` smoke test, on every PR.
+service containers) + a Docker build with a `/healthz` smoke test, plus
+dependency (`pip-audit`) and container image (Trivy, CRITICAL-only gate —
+HIGH is reported but doesn't fail the build yet) vulnerability scanning, on
+every PR. `.github/dependabot.yml` complements the scans with weekly PRs
+bumping dependency/action/base-image versions proactively.
 
 `.github/workflows/cd.yml` runs on push to `main` / `v*` tags: assumes an AWS IAM
 role via **GitHub OIDC** (`secrets.AWS_DEPLOY_ROLE_ARN`), builds and pushes to

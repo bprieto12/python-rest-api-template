@@ -19,6 +19,14 @@ resource "aws_dynamodb_table" "books" {
     name = "id"
     type = "N"
   }
+
+  # Continuous backups, restorable to any point in the last 35 days — the
+  # only thing standing between "someone fat-fingers a delete" and "that
+  # data's just gone." An in-place-updatable attribute, not a table
+  # replacement, so this is free to turn on after the fact.
+  point_in_time_recovery {
+    enabled = true
+  }
 }
 
 resource "aws_dynamodb_table" "isbns" {
@@ -31,5 +39,9 @@ resource "aws_dynamodb_table" "isbns" {
   attribute {
     name = "isbn"
     type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
   }
 }

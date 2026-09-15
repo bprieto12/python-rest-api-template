@@ -44,6 +44,9 @@ books-api in account $ACCOUNT_ID:
   - VPC, ALB, ECS cluster/service
   - Both DynamoDB tables, and everything in them
   - Cognito (user pool, app client) and API Gateway
+  - The SNS alerts topic and its CloudWatch Alarms (any email/webhook you
+    subscribed to it is dropped along with the topic — re-subscribe if you
+    bootstrap this again)
   - The ECR repo books-api, and any images in it
   - The state bucket ($TF_STATE_BUCKET)
   - 4 IAM roles (books-api-execution, books-api-task, books-api-cd, books-api-terraform)
