@@ -32,6 +32,11 @@ versus the app-level config that changes on every deploy.
 
 ## One-time bootstrap (per environment)
 
+`../scripts/bootstrap.sh` runs this (`./bootstrap.sh`) as one step among
+several — the state bucket, `terraform apply`, and the GitHub OIDC/secrets
+wiring too. Run it directly instead only if you specifically want just the
+ECR repo + IAM roles, without the rest.
+
 1. `./bootstrap.sh` — creates the ECR repo, the two IAM roles below (the task
    role's DynamoDB permissions are scoped to the table names `../terraform`
    creates, by ARN), and patches the placeholder account id out of

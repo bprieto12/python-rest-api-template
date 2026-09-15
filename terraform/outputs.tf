@@ -10,6 +10,16 @@ output "alb_dns_name" {
   value = aws_lb.this.dns_name
 }
 
+output "private_subnet_ids" {
+  description = "Feeds the ECS_SUBNETS GitHub Environment variable — see scripts/bootstrap.sh."
+  value       = aws_subnet.private[*].id
+}
+
+output "ecs_security_group_id" {
+  description = "Feeds the ECS_SECURITY_GROUPS GitHub Environment variable — see scripts/bootstrap.sh."
+  value       = aws_security_group.ecs_tasks.id
+}
+
 output "fqdn" {
   value = aws_route53_record.this.fqdn
 }
