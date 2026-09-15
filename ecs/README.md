@@ -10,10 +10,11 @@ versus the app-level config that changes on every deploy.
 ## Files
 
 - **`task-definition.json`** — the Fargate task, two containers:
-  - `api` — the app. `DATABASE_URL` comes from Secrets Manager via `secrets`;
-    everything else is a plain env var. `OTEL_EXPORTER_OTLP_ENDPOINT` points at
-    `localhost:4317` — the sidecar below, reachable because containers in one
-    Fargate task share a network namespace (`awsvpc` mode).
+  - `api` — the app. `DYNAMODB_BOOKS_TABLE`/`DYNAMODB_ISBNS_TABLE`/`AWS_REGION`
+    are plain env vars (no secret — DynamoDB access comes from the task role's
+    IAM permissions, not a connection string). `OTEL_EXPORTER_OTLP_ENDPOINT`
+    points at `localhost:4317` — the sidecar below, reachable because
+    containers in one Fargate task share a network namespace (`awsvpc` mode).
   - `aws-otel-collector` — the [ADOT](https://aws-otel.github.io/) collector,
     using its bundled `ecs-cloudwatch-xray.yaml` preset: traces → X-Ray,
     metrics → CloudWatch (EMF), both tagged with cluster/task/revision via
@@ -31,18 +32,20 @@ versus the app-level config that changes on every deploy.
 
 ## One-time bootstrap (per environment)
 
-1. `./bootstrap.sh` (needs `DATABASE_URL` in the environment — see the script
-   header) — creates the ECR repo, the two IAM roles below, the
-   `books-api/database-url` secret, and patches the placeholder account id
-   out of `task-definition.json`. **Run this before `terraform apply`** —
-   the task definition Terraform creates references these roles by ARN, and
+1. `./bootstrap.sh` — creates the ECR repo, the two IAM roles below (the task
+   role's DynamoDB permissions are scoped to the table names `../terraform`
+   creates, by ARN), and patches the placeholder account id out of
+   `task-definition.json`. **Run this before `terraform apply`** — the task
+   definition Terraform creates references these roles by ARN, and
    registration fails if they don't exist yet.
-2. The service, target group, and Route 53 record are created by
-   [`../terraform`](../terraform) — see its README for the full setup.
-3. Set the GitHub secret `AWS_DEPLOY_ROLE_ARN` and repo/environment variables
-   `ECS_SUBNETS` and `ECS_SECURITY_GROUPS` (comma-separated subnet/SG ids, no
-   quotes) — the one-off migration task in CD needs its own network config
-   since it isn't part of the service.
+2. The service, target group, DynamoDB tables, and Route 53 record are
+   created by [`../terraform`](../terraform) — see its README for the full
+   setup.
+3. Set the GitHub secret `AWS_DEPLOY_ROLE_ARN` in the `production` Environment
+   — that's the only CD-specific setup left. (Older versions of this file
+   also had you set `ECS_SUBNETS`/`ECS_SECURITY_GROUPS` for a migration
+   task's network config — gone now that DynamoDB is schemaless and there's
+   nothing to migrate.)
 
 ## IAM
 
@@ -50,19 +53,14 @@ versus the app-level config that changes on every deploy.
 
 - **Execution role** (`executionRoleArn`, `books-api-execution`): pull from
   ECR, write to CloudWatch Logs (`AmazonECSTaskExecutionRolePolicy` covers
-  both), read the `DATABASE_URL` secret (`secretsmanager:GetSecretValue`,
-  scoped to that one secret's ARN via an inline policy).
+  both). No secrets to read — there's no connection string.
 - **Task role** (`taskRoleArn`, `books-api-task`): what the *app containers*
-  can call at runtime — for the collector sidecar, `AWSXRayDaemonWriteAccess`
-  and `CloudWatchAgentServerPolicy` (EMF metrics).
+  can call at runtime — `dynamodb:GetItem`/`PutItem`/`UpdateItem`/
+  `DeleteItem`/`Scan`/`Query`/`DescribeTable` scoped to the two table ARNs
+  (this is how the app actually talks to DynamoDB — no credentials in the
+  task definition at all), plus `AWSXRayDaemonWriteAccess` and
+  `CloudWatchAgentServerPolicy` for the collector sidecar.
 - The **GitHub OIDC deploy role** (not created by the script — a role trusted
   for this repo via GitHub's OIDC provider) needs `ecs:RegisterTaskDefinition`,
-  `ecs:RunTask`, `ecs:DescribeTasks`, `ecs:UpdateService`,
-  `ecs:DescribeServices`, `iam:PassRole` for the two roles above, plus ECR push.
-
-## Migrations
-
-ECS has no Kubernetes-style init container. CD instead `run-task`s the same
-task definition with the `api` container's command overridden to
-`alembic upgrade head`, waits for it to stop, and checks its exit code —
-the service is only updated if that migration succeeded.
+  `ecs:UpdateService`, `ecs:DescribeServices`, `iam:PassRole` for the two
+  roles above, plus ECR push.

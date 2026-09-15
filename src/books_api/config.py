@@ -22,13 +22,16 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
 
-    # --- Database --------------------------------------------------------------
-    # SQLAlchemy async URL. Use the ``postgresql+asyncpg`` driver in every real
-    # environment; the SQLite URL exists only for hermetic tests.
-    database_url: str = "postgresql+asyncpg://books:books@localhost:5432/books"
-    db_pool_size: int = 5
-    db_max_overflow: int = 10
-    db_echo: bool = False
+    # --- Database (DynamoDB) -------------------------------------------------
+    # Two tables: `books` holds the actual records; `isbns` holds one pointer
+    # item per ISBN (isbn -> book id), used only to enforce ISBN uniqueness via
+    # a conditional write — DynamoDB has no secondary unique-constraint concept.
+    # `dynamodb_endpoint_url` overrides the endpoint for local dev / tests
+    # (DynamoDB Local, moto); leave unset to use real AWS.
+    aws_region: str = "us-east-1"
+    dynamodb_books_table: str = "books-api-books"
+    dynamodb_isbns_table: str = "books-api-isbns"
+    dynamodb_endpoint_url: str | None = None
 
     # --- OpenTelemetry ------------------------------------------------------
     # ``otel_exporter_otlp_endpoint`` maps to the standard OTEL_EXPORTER_OTLP_ENDPOINT

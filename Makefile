@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install-uv install lock fmt lint typecheck test cov run migrate revision seed up down logs docker-build
+.PHONY: help install-uv install lock fmt lint typecheck test cov run seed up down logs docker-build
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -25,7 +25,7 @@ lint: ## Lint (ruff) without fixing
 typecheck: ## Static types (mypy, strict)
 	uv run mypy src
 
-test: ## Run the test suite (SQLite unless TEST_DATABASE_URL is set)
+test: ## Run the test suite (against an in-process moto DynamoDB double, no services needed)
 	uv run pytest
 
 cov: ## Tests with coverage report
@@ -34,14 +34,8 @@ cov: ## Tests with coverage report
 run: ## Run the API with autoreload on :8000
 	uv run uvicorn books_api.main:app --reload --port 8000
 
-migrate: ## Apply migrations to $$DATABASE_URL
-	uv run alembic upgrade head
-
-revision: ## Autogenerate a migration: make revision m="add rating"
-	uv run alembic revision --autogenerate -m "$(m)"
-
-seed: ## Load the mock catalogue
-	uv run python scripts/seed.py
+seed: ## Load the mock catalogue (pass CREATE_TABLES=1 to also create the tables — local dev only)
+	uv run python scripts/seed.py $(if $(CREATE_TABLES),--create-tables)
 
 up: ## Bring up the full local stack (db + collector + api)
 	docker compose up --build

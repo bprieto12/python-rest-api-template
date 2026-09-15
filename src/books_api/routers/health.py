@@ -5,10 +5,8 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_session
+from ..db import Tables, get_tables
 
 router = APIRouter(tags=["health"])
 
@@ -19,8 +17,10 @@ async def healthz() -> dict[str, str]:
 
 
 @router.get("/readyz", summary="Readiness probe")
-async def readyz(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
-    await session.execute(text("SELECT 1"))
+async def readyz(tables: Annotated[Tables, Depends(get_tables)]) -> dict[str, str]:
+    # .load() does a DescribeTable call — cheap, and a real connectivity +
+    # existence check, unlike just inspecting already-cached metadata.
+    await tables.books.load()
     return {"status": "ready"}
 
 

@@ -1,37 +1,21 @@
 #!/usr/bin/env bash
-# One-time AWS prerequisites for books-api: the ECR repo, the ECS
-# execution/task IAM roles, and the DATABASE_URL secret — everything
-# ecs/task-definition.json and terraform/ assume already exists, but that
-# nothing in this repo creates. Safe to re-run: every step checks before
-# creating, and the two AWS-side updates (attach-role-policy, put-role-policy)
-# are themselves idempotent.
+# One-time AWS prerequisites for books-api: the ECR repo and the ECS
+# execution/task IAM roles — everything ecs/task-definition.json and
+# terraform/ assume already exists, but that nothing in this repo creates.
+# Safe to re-run: every step checks before creating, and the two AWS-side
+# updates (attach-role-policy, put-role-policy) are themselves idempotent.
 #
-# Usage:
-#   DATABASE_URL='postgresql+asyncpg://user:pass@host:5432/books' ./ecs/bootstrap.sh
+# Usage: ./ecs/bootstrap.sh
 #
-# Does NOT create a database — DATABASE_URL has to point at a real Postgres
-# instance you've already stood up (this repo's Terraform doesn't provision
-# one; docker-compose's Postgres is local-dev only, and "localhost" from
-# inside an ECS task means that task's own network namespace, never your
-# machine). If DATABASE_URL is unset, the secret is created with an obvious
-# placeholder instead of failing outright — everything else (ECR, IAM roles)
-# still gets created, but the deployed service's DB-backed calls will fail
-# until you rotate it:
-#   aws secretsmanager put-secret-value --secret-id books-api/database-url --secret-string '...'
+# Does NOT create the DynamoDB tables — terraform/ owns those; this script
+# only grants books-api-task the permissions to use them once they exist,
+# scoped to their ARNs by name (same names terraform/ creates, so run
+# terraform apply either before or after this — order doesn't matter here).
 
 set -euo pipefail
 
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "WARNING: DATABASE_URL not set — creating the secret with a placeholder value."
-  echo "  The deployed service's DB-backed endpoints will fail until you rotate it"
-  echo "  (see this script's header for the command)."
-  echo
-  DATABASE_URL="postgresql+asyncpg://REPLACE-ME:REPLACE-ME@REPLACE-ME:5432/REPLACE-ME"
-fi
-
 AWS_REGION="${AWS_REGION:-us-east-1}"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-SECRET_NAME="books-api/database-url"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Account: $ACCOUNT_ID   Region: $AWS_REGION"
@@ -45,20 +29,7 @@ else
   echo "Created ECR repo books-api"
 fi
 
-# --- Secrets Manager -------------------------------------------------------
-if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-  echo "Secret $SECRET_NAME already exists — not overwriting (use"
-  echo "  aws secretsmanager put-secret-value --secret-id $SECRET_NAME --secret-string '...'"
-  echo "  to rotate it)"
-else
-  aws secretsmanager create-secret --name "$SECRET_NAME" \
-    --secret-string "$DATABASE_URL" --region "$AWS_REGION" >/dev/null
-  echo "Created secret $SECRET_NAME"
-fi
-SECRET_ARN="$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" \
-  --region "$AWS_REGION" --query ARN --output text)"
-
-# --- IAM: execution role (pull image, write logs, read the secret) ---------
+# --- IAM: execution role (pull image, write logs) --------------------------
 TRUST_POLICY='{
   "Version": "2012-10-17",
   "Statement": [{
@@ -82,21 +53,7 @@ create_role_if_missing() {
 create_role_if_missing books-api-execution
 aws iam attach-role-policy --role-name books-api-execution \
   --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-
-aws iam put-role-policy --role-name books-api-execution \
-  --policy-name books-api-database-url \
-  --policy-document "$(cat <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": "secretsmanager:GetSecretValue",
-    "Resource": "$SECRET_ARN"
-  }]
-}
-EOF
-)"
-echo "  books-api-execution: AmazonECSTaskExecutionRolePolicy + read access to $SECRET_NAME"
+echo "  books-api-execution: AmazonECSTaskExecutionRolePolicy"
 
 # --- IAM: task role (what the app/sidecar containers can call at runtime) --
 create_role_if_missing books-api-task
@@ -104,7 +61,32 @@ aws iam attach-role-policy --role-name books-api-task \
   --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
 aws iam attach-role-policy --role-name books-api-task \
   --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
-echo "  books-api-task: AWSXRayDaemonWriteAccess + CloudWatchAgentServerPolicy"
+
+DYNAMODB_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Scan",
+      "dynamodb:Query",
+      "dynamodb:DescribeTable"
+    ],
+    "Resource": [
+      "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/books-api-books",
+      "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/books-api-isbns"
+    ]
+  }]
+}
+EOF
+)
+aws iam put-role-policy --role-name books-api-task \
+  --policy-name books-api-dynamodb --policy-document "$DYNAMODB_POLICY"
+echo "  books-api-task: AWSXRayDaemonWriteAccess + CloudWatchAgentServerPolicy + DynamoDB access on both tables"
 echo
 
 # --- Patch the placeholder account id in task-definition.json -------------
@@ -117,4 +99,4 @@ else
 fi
 
 echo
-echo "Done. Next: terraform apply (in terraform/), then push to main so CD builds and deploys the real image."
+echo "Done. Next: terraform apply (in terraform/) to create the DynamoDB tables and the rest of the service's infra, then push to main so CD builds and deploys the real image."

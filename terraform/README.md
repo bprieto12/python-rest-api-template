@@ -111,6 +111,9 @@ Applying this needs a broader role than CD's OIDC deploy role — at minimum
 `CreateService` / `UpdateService` / `DescribeServices` /
 `PutClusterCapacityProviders`, `acm:RequestCertificate` /
 `DescribeCertificate`, `route53:GetHostedZone` / `ChangeResourceRecordSets`,
+`dynamodb:CreateTable` / `DeleteTable` / `DescribeTable` / `UpdateTable`
+(note: this is a *different* set of DynamoDB permissions than the task
+role's — this is table lifecycle, not item access; see `ecs/README.md`),
 and `iam:PassRole` for the execution/task roles. Run `apply` from a separate,
 more privileged role than the one CD assumes — don't widen the deploy role
 just to let CI run Terraform too. In CI this is `secrets.TF_DEPLOY_ROLE_ARN`,

@@ -31,20 +31,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: books
-          POSTGRES_PASSWORD: books
-          POSTGRES_DB: books_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U books -d books_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      TEST_DATABASE_URL: postgresql+asyncpg://books:books@localhost:5432/books_test
-      DATABASE_URL: postgresql+asyncpg://books:books@localhost:5432/books_test
+    # No service container — tests run against an in-process moto server
+    # (see tests/conftest.py), not a real or containerized DynamoDB.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -52,10 +40,6 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --frozen
-      - name: Alembic upgrade/downgrade round-trips
-        run: |
-          uv run alembic upgrade head
-          uv run alembic downgrade base
       - name: Tests
         run: uv run pytest --cov --cov-report=xml
       - uses: actions/upload-artifact@v4
@@ -81,7 +65,6 @@ jobs:
         run: |
           docker run -d --name api -p 8000:8000 \
             -e OTEL_ENABLED=false \
-            -e DATABASE_URL=postgresql+asyncpg://x:x@127.0.0.1:5432/x \
             books-api:ci
           for i in $(seq 1 20); do
             curl -fsS http://localhost:8000/healthz && break || sleep 1
