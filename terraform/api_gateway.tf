@@ -33,16 +33,20 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
 }
 
 # HTTP_PROXY + VPC_LINK forwards the request essentially as-is (method,
-# path, headers, body) to the ALB's HTTPS listener — the integration_uri for
-# a private ALB integration is the *listener* ARN, not the load balancer's
-# or target group's.
+# path, headers, body) to the ALB's listener — the integration_uri for a
+# private ALB integration is the *listener* ARN, not the load balancer's or
+# target group's. Deliberately the HTTP listener, not an HTTPS one — this
+# integration type doesn't perform TLS to the target regardless of which
+# listener it's pointed at (see alb.tf), so pointing it at an HTTPS listener
+# just gets every request rejected by the ALB itself. TLS already terminates
+# for real at this API's custom domain (aws_apigatewayv2_domain_name below).
 resource "aws_apigatewayv2_integration" "alb" {
   api_id             = aws_apigatewayv2_api.this.id
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
   connection_type    = "VPC_LINK"
   connection_id      = aws_apigatewayv2_vpc_link.this.id
-  integration_uri    = aws_lb_listener.https.arn
+  integration_uri    = aws_lb_listener.http.arn
 }
 
 resource "aws_apigatewayv2_route" "default" {
@@ -60,9 +64,10 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 }
 
-# Reuses the same regional ACM cert the ALB used to terminate TLS with —
-# API Gateway regional custom domains need a cert in the same region, which
-# this already is.
+# This is the one place TLS actually terminates for real, on the public
+# path — everything from here to the ALB is plain HTTP over a private VPC
+# hop (see the integration above). Regional custom domains need a cert in
+# the same region, which acm.tf's already is.
 resource "aws_apigatewayv2_domain_name" "this" {
   domain_name = var.domain_name
 

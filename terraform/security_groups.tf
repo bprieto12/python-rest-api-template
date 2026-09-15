@@ -71,8 +71,8 @@ resource "aws_security_group" "vpc_link" {
 resource "aws_vpc_security_group_egress_rule" "vpc_link_to_alb" {
   security_group_id            = aws_security_group.vpc_link.id
   referenced_security_group_id = aws_security_group.alb.id
-  from_port                    = 443
-  to_port                      = 443
+  from_port                    = 80
+  to_port                      = 80
   ip_protocol                  = "tcp"
   description                  = "To the internal ALB"
 }
@@ -80,8 +80,8 @@ resource "aws_vpc_security_group_egress_rule" "vpc_link_to_alb" {
 resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc_link" {
   security_group_id            = aws_security_group.alb.id
   referenced_security_group_id = aws_security_group.vpc_link.id
-  from_port                    = 443
-  to_port                      = 443
+  from_port                    = 80
+  to_port                      = 80
   ip_protocol                  = "tcp"
   description                  = "From the API Gateway VPC Link"
 }
