@@ -93,7 +93,7 @@ resource "aws_ecs_service" "this" {
 
   enable_execute_command = true
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.http]
 
   lifecycle {
     # CD owns rollouts (`register-task-definition` + `update-service

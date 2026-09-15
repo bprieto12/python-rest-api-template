@@ -12,8 +12,12 @@ pipeline section for how this fits with `../ecs/` and CD.
 ## Request path
 
 ```
-caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --> ALB (internal) --> ECS
+caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal) --> ECS
 ```
+
+TLS terminates for real at API Gateway; everything after that is plain HTTP
+inside the private VPC — see "The ALB is dedicated to this one service, and
+plain HTTP" below for why.
 
 `api_gateway.tf` is the only public thing here. The ALB (`alb.tf`) is
 `internal = true` specifically so this can't be bypassed — there's no way to
@@ -77,15 +81,25 @@ Net effect: Terraform owns the *shape* (networking, load balancer wiring,
 DNS); CD owns *rollouts*. Re-running `terraform apply` after a normal deploy
 should show no changes to those two resources.
 
-## The ALB is dedicated to this one service
+## The ALB is dedicated to this one service, and plain HTTP
 
-`alb.tf`'s HTTPS listener forwards straight to `books-api`'s target group —
-no host-header listener rule, no fallback 404. With one service behind it,
+`alb.tf`'s listener forwards straight to `books-api`'s target group — no
+host-header listener rule, no fallback 404. With one service behind it,
 there's nothing to route between. If a second service ever needs to share
 this ALB (rather than getting its own, which is also a fine choice), that's
 the point at which pulling the ALB/VPC/cluster out into something shared
 starts paying for itself — see the git history on this file for what that
 split looked like before it was folded back in here.
+
+It's HTTP, not HTTPS, despite `acm.tf` existing right there — API Gateway's
+`HTTP_PROXY` + `VPC_LINK` private integration to an ALB doesn't perform TLS
+to the target no matter which listener it's pointed at (confirmed directly:
+pointing it at an HTTPS listener got every request rejected by the ALB
+itself with "plain HTTP request was sent to HTTPS port"). That's fine here —
+TLS terminates for real at API Gateway's custom domain
+(`aws_apigatewayv2_domain_name`, using the same cert), and this listener is
+only ever reached from the VPC Link's own ENIs inside the private VPC, never
+from the public internet.
 
 ## Route 53: looked up, not owned
 
