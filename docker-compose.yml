@@ -1,26 +1,21 @@
-# Local dev stack: Postgres + OpenTelemetry Collector + Prometheus + Grafana + the API.
+# Local dev stack: DynamoDB Local + OpenTelemetry Collector + Prometheus + Grafana + the API.
 #   docker compose up --build
-# The API waits for Postgres, runs migrations, seeds mock data, then serves on :8000.
+# The API waits for DynamoDB Local, creates tables + seeds mock data, then serves on :8000.
 #   API      http://localhost:8000/docs
 #   Grafana  http://localhost:3000   (no login; "Books API — Overview" dashboard)
 #   Prom     http://localhost:9090
 
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: books
-      POSTGRES_PASSWORD: books
-      POSTGRES_DB: books
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.5.4
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
     ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U books -d books"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      # Host 8001, not 8000 — that's the api container below. The api
+      # container itself talks to this one over the compose network at
+      # dynamodb-local:8000 regardless; this mapping is only so you can point
+      # the AWS CLI at http://localhost:8001 from your own machine to poke
+      # around (`aws dynamodb scan --endpoint-url http://localhost:8001 ...`).
+      - "8001:8000"
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1
@@ -66,13 +61,16 @@ services:
   api:
     build: .
     depends_on:
-      db:
-        condition: service_healthy
+      dynamodb-local:
+        condition: service_started
       otel-collector:
         condition: service_started
     environment:
       ENVIRONMENT: local
-      DATABASE_URL: postgresql+asyncpg://books:books@db:5432/books
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local # DynamoDB Local ignores credentials entirely — any
+      AWS_SECRET_ACCESS_KEY: local # non-empty value satisfies the SDK's "has credentials" check
+      DYNAMODB_ENDPOINT_URL: http://dynamodb-local:8000
       OTEL_SERVICE_NAME: books-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
@@ -81,9 +79,8 @@ services:
     command:
       - sh
       - -c
-      - "alembic upgrade head && python scripts/seed.py && uvicorn books_api.main:app --host 0.0.0.0 --port 8000"
+      - "python scripts/seed.py --create-tables && uvicorn books_api.main:app --host 0.0.0.0 --port 8000"
 
 volumes:
-  pgdata:
   promdata:
   grafanadata:

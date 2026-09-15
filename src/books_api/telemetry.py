@@ -1,9 +1,13 @@
 """OpenTelemetry wiring: metrics + traces, with a console fallback.
 
 ``setup_telemetry`` installs global providers once per process. ``instrument_app``
-attaches the FastAPI middleware to a specific app, and ``instrument_engine``
-attaches the SQLAlchemy hooks to a specific engine. All three are safe to call
-more than once (relevant to the test suite, which builds many apps).
+attaches the FastAPI middleware to a specific app. Both are safe to call more
+than once (relevant to the test suite, which builds many apps).
+
+DynamoDB calls are instrumented globally via ``BotocoreInstrumentor`` (it
+patches botocore's request pipeline, which aioboto3/aiobotocore also runs
+through) rather than per-resource like the old SQLAlchemy engine hook — boto3
+resources have no single object to attach a per-engine instrumentor to.
 """
 
 from __future__ import annotations
@@ -11,9 +15,8 @@ from __future__ import annotations
 import logging
 
 from opentelemetry import metrics, trace
-from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor
+from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
     ConsoleMetricExporter,
@@ -88,9 +91,9 @@ def setup_telemetry(settings: Settings) -> None:
     trace.set_tracer_provider(tracer_provider)
 
     try:
-        AsyncPGInstrumentor().instrument()  # type: ignore[no-untyped-call]
+        BotocoreInstrumentor().instrument()  # type: ignore[no-untyped-call]
     except Exception:  # already instrumented (e.g. re-import in tests) — keep booting
-        logger.debug("asyncpg instrumentation skipped", exc_info=True)
+        logger.debug("botocore instrumentation skipped", exc_info=True)
 
     _configured = True
     logger.info("OpenTelemetry configured (otlp=%s)", settings.otel_exporter_otlp_endpoint or "off")
@@ -101,13 +104,6 @@ def instrument_app(app: object) -> None:
         FastAPIInstrumentor.instrument_app(app)  # type: ignore[arg-type]
     except Exception:
         logger.debug("fastapi instrumentation skipped", exc_info=True)
-
-
-def instrument_engine(engine: object) -> None:
-    try:
-        SQLAlchemyInstrumentor().instrument(engine=engine.sync_engine)  # type: ignore[attr-defined]
-    except Exception:
-        logger.debug("sqlalchemy instrumentation skipped", exc_info=True)
 
 
 def get_meter() -> metrics.Meter:

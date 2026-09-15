@@ -7,16 +7,13 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-    "sqlalchemy[asyncio]>=2.0.36",
-    "asyncpg>=0.30",
-    "alembic>=1.14",
+    "aioboto3>=13.2",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "opentelemetry-sdk>=1.29",
     "opentelemetry-exporter-otlp>=1.29",
     "opentelemetry-instrumentation-fastapi>=0.50b0",
-    "opentelemetry-instrumentation-sqlalchemy>=0.50b0",
-    "opentelemetry-instrumentation-asyncpg>=0.50b0",
+    "opentelemetry-instrumentation-botocore>=0.50b0",
 ]
 
 [dependency-groups]
@@ -25,7 +22,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "httpx>=0.28",
-    "aiosqlite>=0.20",
+    "moto[server]>=5.0",
     "ruff>=0.8",
     "mypy>=1.13",
 ]
@@ -52,9 +49,6 @@ ignore = ["B008"]  # FastAPI Depends() in defaults
 [tool.ruff.lint.isort]
 known-first-party = ["books_api"]
 
-[tool.ruff.lint.per-file-ignores]
-"alembic/versions/*" = ["E501"]
-
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -64,8 +58,15 @@ explicit_package_bases = true
 namespace_packages = true
 
 [[tool.mypy.overrides]]
-module = ["tests.*", "alembic.*"]
+module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# None of these ship inline types (no py.typed) or a stub package we've
+# adopted — repository.py/db.py already type their objects as `Any` at the
+# boundary rather than fight this.
+module = ["aioboto3.*", "aiobotocore.*", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

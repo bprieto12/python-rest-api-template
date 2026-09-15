@@ -10,9 +10,9 @@ from fastapi import FastAPI
 
 from . import __version__
 from .config import get_settings
-from .db import create_engine, create_sessionmaker
+from .db import close_dynamodb, open_dynamodb
 from .routers import books, health
-from .telemetry import instrument_app, instrument_engine, setup_telemetry
+from .telemetry import instrument_app, setup_telemetry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,16 +23,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     setup_telemetry(settings)
 
-    engine = create_engine(settings)
-    app.state.engine = engine
-    app.state.sessionmaker = create_sessionmaker(engine)
-    instrument_engine(engine)
+    app.state.dynamodb = await open_dynamodb(settings)
     logger.info("books-api started (env=%s)", settings.environment)
 
     try:
         yield
     finally:
-        await engine.dispose()
+        await close_dynamodb(app.state.dynamodb)
         logger.info("books-api stopped")
 
 

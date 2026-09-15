@@ -19,16 +19,13 @@
       "dependsOn": [{ "containerName": "aws-otel-collector", "condition": "START" }],
       "environment": [
         { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "DYNAMODB_BOOKS_TABLE", "value": "books-api-books" },
+        { "name": "DYNAMODB_ISBNS_TABLE", "value": "books-api-isbns" },
         { "name": "OTEL_ENABLED", "value": "true" },
         { "name": "OTEL_SERVICE_NAME", "value": "books-api" },
         { "name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": "http://localhost:4317" },
         { "name": "OTEL_EXPORTER_OTLP_PROTOCOL", "value": "grpc" }
-      ],
-      "secrets": [
-        {
-          "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:351882761505:secret:books-api/database-url"
-        }
       ],
       "healthCheck": {
         "command": [

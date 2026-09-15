@@ -1,29 +1,28 @@
-"""ORM models. Kept portable so the test suite can run on SQLite."""
+"""The book record shape. Not a DynamoDB item directly — see repository.py's
+``_from_item``/``_book_item`` for the mapping to actual DynamoDB attribute
+types (numbers round-trip as ``Decimal`` at the wire level; timestamps are
+stored as ISO 8601 strings). Kept as a plain dataclass, with
+``BookRead.model_config = ConfigDict(from_attributes=True)`` in schemas.py
+reading it the same way it used to read a SQLAlchemy ORM instance.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Integer, Numeric, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
 
-from .db import Base
-
-
-class Book(Base):
-    __tablename__ = "books"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    title: Mapped[str] = mapped_column(String(512), index=True)
-    author: Mapped[str] = mapped_column(String(256), index=True)
-    isbn: Mapped[str] = mapped_column(String(20), unique=True, index=True)
-    genre: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
-    published_year: Mapped[int | None] = mapped_column(Integer, default=None)
-    price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
-    in_stock: Mapped[int] = mapped_column(Integer, default=0)
-    description: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+@dataclass
+class Book:
+    id: int
+    title: str
+    author: str
+    isbn: str
+    genre: str | None
+    published_year: int | None
+    price: Decimal
+    in_stock: int
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
