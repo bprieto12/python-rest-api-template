@@ -1,22 +1,19 @@
 # Copy to terraform.tfvars (gitignored) and fill in real values, or pass
-# equivalent -var flags / a per-environment .tfvars file. Values below follow
-# the same EXAMPLE/000000000000 placeholder convention as
-# ../ecs/task-definition.json.
+# equivalent -var flags.
+#
+# Execution/task role ARNs, image, and container port aren't here — they're
+# already in ../ecs/task-definition.json; edit that file, not this one, to
+# change them.
 
 aws_region = "us-east-1"
 
-# Platform inputs — from the shared `infrastructure` repo's outputs.
-cluster_name            = "books-api"
-vpc_id                  = "vpc-EXAMPLE"
-subnet_ids              = ["subnet-EXAMPLE1", "subnet-EXAMPLE2"]
-security_group_ids      = ["sg-EXAMPLE"]
-alb_listener_arn        = "arn:aws:elasticloadbalancing:us-east-1:000000000000:listener/app/shared/EXAMPLE/EXAMPLE"
-alb_dns_name            = "shared-EXAMPLE.us-east-1.elb.amazonaws.com"
-alb_zone_id             = "Z35SXDOTRQ7X7K" # us-east-1 ALB hosted zone id (constant per region)
-hosted_zone_id          = "ZEXAMPLE"
-listener_rule_priority  = 10
+hosted_zone_name = "example.com"              # must already exist in Route 53
+domain_name      = "books-api.example.com"
 
-# Service inputs
-# (execution/task role ARNs, image, and container port come from
-# ../ecs/task-definition.json — edit that file, not this one, to change them)
-domain_name = "books-api.example.com"
+# Defaults are usually fine to leave as-is:
+# vpc_cidr           = "10.0.0.0/16"
+# az_count           = 2
+# single_nat_gateway = true
+# cluster_name       = "books-api"
+# health_check_path  = "/healthz"
+# desired_count      = 2

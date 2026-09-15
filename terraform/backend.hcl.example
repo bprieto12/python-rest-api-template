@@ -1,0 +1,38 @@
+# Copy to backend.hcl (gitignored) and fill in real values:
+#   terraform init -backend-config=backend.hcl
+#
+# The bucket doesn't need to be created by Terraform (there's no other repo's
+# Terraform to keep it in sync with here) — CLI commands, once. <bucket> must
+# be globally unique across all of AWS, lowercase, no underscores. In
+# us-east-1 specifically, omit --create-bucket-configuration entirely
+# (passing LocationConstraint=us-east-1 there errors out) — include it for
+# every other region.
+#
+#   aws s3api create-bucket --bucket <bucket> --region <region>
+#   # aws s3api create-bucket --bucket <bucket> --region <region> \
+#   #   --create-bucket-configuration LocationConstraint=<region>   # any region other than us-east-1
+#
+#   aws s3api put-bucket-versioning --bucket <bucket> \
+#     --versioning-configuration Status=Enabled
+#   # protects state from accidental overwrite/corruption — lets you roll
+#   # back to a prior version if something clobbers the latest
+#
+#   aws s3api put-bucket-encryption --bucket <bucket> \
+#     --server-side-encryption-configuration \
+#     '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}'
+#   # state can contain sensitive values (ARNs, sometimes resource attributes
+#   # that are themselves secrets) — encrypt at rest
+#
+#   aws s3api put-public-access-block --bucket <bucket> \
+#     --public-access-block-configuration \
+#     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+#   # state should never be publicly readable
+#
+# No DynamoDB table — the S3 backend's native locking (use_lockfile below,
+# Terraform >= 1.10) uses S3's own conditional writes instead.
+
+bucket       = "REPLACE-ME-terraform-state-bucket"
+key          = "books-api.tfstate"
+region       = "us-east-1"
+use_lockfile = true
+encrypt      = true

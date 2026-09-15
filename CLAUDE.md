@@ -84,14 +84,14 @@ revision, then runs `alembic upgrade head` as a one-off **ECS Fargate** task
 stabilize. There is no init container on ECS — the migration task *is* the gate;
 the service update only happens if it exits 0.
 
-The cluster, VPC/subnets, and ALB are shared platform resources owned by the
-`infrastructure` repo (a sibling submodule, not part of this repo). This
-repo's `terraform/` owns the service-level pieces — the ECS service, target
-group, listener rule on the shared ALB, and one Route 53 record — created
-once via `terraform apply`, not something CD re-applies; CD only registers
-new task definition revisions and calls `update-service`. Per-account
-placeholders and IAM role requirements are in `ecs/README.md` and
-`terraform/README.md`.
+`terraform/` owns everything that isn't re-applied on every deploy: a
+dedicated VPC, the ECS cluster, an ALB (with ACM cert and one Route 53
+record) built just for this service, the target group, and the initial ECS
+service + task definition revision — created once via `terraform apply`
+(locally, or via `.github/workflows/terraform.yml`'s `workflow_dispatch`),
+not something CD re-applies; CD only registers new task definition revisions
+and calls `update-service`. Per-account placeholders and IAM role
+requirements are in `ecs/README.md` and `terraform/README.md`.
 
 ## Conventions
 

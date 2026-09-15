@@ -2,10 +2,10 @@
 
 Fargate task definition + service for `books-api`. CD pushes images to ECR and
 updates these; the cluster, VPC/subnets, security groups, ALB, and target group
-are assumed to already exist — owned by the shared `infrastructure` repo,
-outside this repo. That's the same boundary the Kubernetes manifests this
-replaced drew around the EKS cluster: infra that's provisioned once, versus the
-app-level config that changes on every deploy.
+are assumed to already exist — created once via [`../terraform`](../terraform),
+not something CD re-applies. That's the same boundary the Kubernetes manifests
+this replaced drew around the EKS cluster: infra that's provisioned once,
+versus the app-level config that changes on every deploy.
 
 ## Files
 
@@ -31,24 +31,32 @@ app-level config that changes on every deploy.
 
 ## One-time bootstrap (per environment)
 
-The service, target group, listener rule, and Route 53 record are created by
-[`../terraform`](../terraform) — see its README for the full setup. Once
-that's applied:
-
-1. Set the GitHub secret `AWS_DEPLOY_ROLE_ARN` and repo/environment variables
+1. `./bootstrap.sh` (needs `DATABASE_URL` in the environment — see the script
+   header) — creates the ECR repo, the two IAM roles below, the
+   `books-api/database-url` secret, and patches the placeholder account id
+   out of `task-definition.json`. **Run this before `terraform apply`** —
+   the task definition Terraform creates references these roles by ARN, and
+   registration fails if they don't exist yet.
+2. The service, target group, and Route 53 record are created by
+   [`../terraform`](../terraform) — see its README for the full setup.
+3. Set the GitHub secret `AWS_DEPLOY_ROLE_ARN` and repo/environment variables
    `ECS_SUBNETS` and `ECS_SECURITY_GROUPS` (comma-separated subnet/SG ids, no
    quotes) — the one-off migration task in CD needs its own network config
    since it isn't part of the service.
 
 ## IAM
 
-- **Execution role** (`executionRoleArn`): pull from ECR, write to CloudWatch
-  Logs, read the `DATABASE_URL` secret (`secretsmanager:GetSecretValue`).
-- **Task role** (`taskRoleArn`): what the *app containers* can call at runtime —
-  for the collector sidecar, attach `AWSXRayDaemonWriteAccess` and enough
-  CloudWatch Logs access to write EMF metrics (`CloudWatchAgentServerPolicy`
-  covers it).
-- The **GitHub OIDC deploy role** needs `ecs:RegisterTaskDefinition`,
+`bootstrap.sh` creates both of these — this is what it sets up and why:
+
+- **Execution role** (`executionRoleArn`, `books-api-execution`): pull from
+  ECR, write to CloudWatch Logs (`AmazonECSTaskExecutionRolePolicy` covers
+  both), read the `DATABASE_URL` secret (`secretsmanager:GetSecretValue`,
+  scoped to that one secret's ARN via an inline policy).
+- **Task role** (`taskRoleArn`, `books-api-task`): what the *app containers*
+  can call at runtime — for the collector sidecar, `AWSXRayDaemonWriteAccess`
+  and `CloudWatchAgentServerPolicy` (EMF metrics).
+- The **GitHub OIDC deploy role** (not created by the script — a role trusted
+  for this repo via GitHub's OIDC provider) needs `ecs:RegisterTaskDefinition`,
   `ecs:RunTask`, `ecs:DescribeTasks`, `ecs:UpdateService`,
   `ecs:DescribeServices`, `iam:PassRole` for the two roles above, plus ECR push.
 
