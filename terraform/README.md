@@ -28,6 +28,10 @@ flow a caller goes through.
 
 ## Auth
 
+See [`../docs/RUNBOOK.md`](../docs/RUNBOOK.md) for the consumer-facing
+version of this (how to make a request, how to get a client added) — this
+section is about why it's built this way.
+
 A caller does the OAuth2 client-credentials grant against the Cognito
 domain, then calls the API with the resulting bearer token.
 [`../scripts/get-token.sh`](../scripts/get-token.sh) wraps that grant —

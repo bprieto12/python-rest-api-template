@@ -93,7 +93,9 @@ without a relational unique constraint.
 - **API auth** is separate from all of that — callers authenticate to the
   *API itself* with an OAuth2 client-credentials token from Cognito, checked
   by API Gateway before a request ever reaches the ALB/ECS. See
-  [`terraform/README.md`](terraform/README.md)'s "Auth" section for the flow.
+  [`terraform/README.md`](terraform/README.md)'s "Auth" section for the flow,
+  or [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for the short version (how to
+  actually make a request).
 - **Rollout** registers a new [`ecs/task-definition.json`](ecs/task-definition.json)
   revision, then `aws ecs update-service --force-new-deployment` and waits for
   the service to stabilize — there's no migration step (DynamoDB is
@@ -101,3 +103,10 @@ without a relational unique constraint.
   [`ecs/bootstrap.sh`](ecs/bootstrap.sh) for the one-time IAM/ECR bootstrap,
   and [`terraform/README.md`](terraform/README.md) for the infrastructure
   itself (including the DynamoDB tables, API Gateway, and Cognito).
+
+## Operations
+
+Once it's running: [`docs/RUNBOOK.md`](docs/RUNBOOK.md) covers how to view
+traces/metrics/logs for the deployed service, how to add or remove an API
+caller ("user management," here meaning OAuth2 clients — this API has no
+human user accounts), and how to actually make an authenticated request.

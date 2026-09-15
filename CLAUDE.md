@@ -98,6 +98,12 @@ definition revisions and calls `update-service`. See `terraform/README.md`'s
 "Request path"/"Auth" sections for the full flow. Per-account placeholders and
 IAM role requirements are in `ecs/README.md` and `terraform/README.md`.
 
+`docs/RUNBOOK.md` covers operating the deployed service day-to-day — viewing
+traces/metrics/logs, adding/removing an OAuth2 client ("user management"),
+making an authenticated request. Update it alongside any change that shifts
+where observability data lands or how auth actually works, the same way
+`terraform/README.md` gets updated for infrastructure changes.
+
 ## Conventions
 
 - Everything DB-facing is `async`; there is no sync path.
