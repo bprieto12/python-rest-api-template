@@ -188,20 +188,19 @@ depending on which layer you care about:
 | `AWS/ApplicationELB` | Request count/latency/5xx between API Gateway and ECS specifically — lets you tell a gateway-level rejection apart from a backend-level failure |
 
 **Fastest path: the CloudWatch dashboard** (`terraform/dashboard.tf`,
-recreated on every `apply` like everything else here) — `terraform output
--raw dashboard_url`, or CloudWatch → Dashboards → `books-api`
-(`books-api-staging` for staging). It covers API performance (status
-codes, top routes, top consumers, request rate, p95 latency), infrastructure
-(ECS task counts, per-task CPU/Memory — there are no EC2 hosts on Fargate,
-so "per host" there means per-task), and DynamoDB capacity/latency, all in
-one place.
+recreated on every `apply` like everything else here). It covers API
+performance (status codes, top routes, top consumers, request rate, p95
+latency), infrastructure (ECS task counts, per-task CPU/Memory — there are
+no EC2 hosts on Fargate, so "per host" there means per-task), and DynamoDB
+capacity/latency, all in one place:
 
-Otherwise: CloudWatch → Metrics → browse by namespace. If you'd rather use
-Grafana than live in the CloudWatch console: point your existing local
-Grafana instance at CloudWatch as a data source (native support, no new AWS
-infrastructure needed) — see the note in `terraform/README.md` if you want
-to go further and replicate the local Prometheus/Grafana setup for real in
-AWS.
+- **Production:** https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/books-api
+- **Staging:** https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/books-api-staging
+
+(or `terraform output -raw dashboard_url` from the relevant workspace,
+which produces the same link).
+
+Otherwise: CloudWatch → Metrics → browse by namespace.
 
 ### Alerting
 

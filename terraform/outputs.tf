@@ -45,5 +45,5 @@ output "alerts_topic_arn" {
 
 output "dashboard_url" {
   description = "Direct console link to the CloudWatch dashboard (dashboard.tf)."
-  value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.this.dashboard_name}"
+  value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards/dashboard/${aws_cloudwatch_dashboard.this.dashboard_name}"
 }

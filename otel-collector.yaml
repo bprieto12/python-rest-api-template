@@ -1,6 +1,9 @@
-# Minimal collector for local development: accept OTLP, log it, and expose
-# metrics for Prometheus to scrape on :8889. Swap the exporters for your real
-# backend (AWS X-Ray / CloudWatch / Amazon Managed Prometheus) in each cluster.
+# Minimal collector for local development: accept OTLP and log it to the
+# console (docker compose logs -f otel-collector). No local visualization
+# backend on purpose — production/staging ship to CloudWatch instead (see
+# ecs/task-definition.*.json's aws-otel-collector sidecar and
+# terraform/dashboard.tf); swap the `debug` exporter below for your own
+# real backend if you want one locally too.
 
 receivers:
   otlp:
@@ -16,17 +19,12 @@ processors:
 exporters:
   debug:
     verbosity: normal
-  prometheus:
-    endpoint: 0.0.0.0:8889
-    # Turn OTel resource attributes (service.name, deployment.environment, ...)
-    # into Prometheus labels so you can filter by them.
-    resource_to_telemetry_conversion:
-      enabled: true
 
 service:
   telemetry:
     metrics:
-      # Expose the collector's own metrics so Prometheus can scrape :8888.
+      # The collector's own internal metrics — curl :8888/metrics for ad-hoc
+      # inspection, no scraper required.
       address: 0.0.0.0:8888
   pipelines:
     traces:
@@ -36,4 +34,4 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug, prometheus]
+      exporters: [debug]
