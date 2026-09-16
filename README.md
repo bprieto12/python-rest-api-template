@@ -17,6 +17,7 @@ holds ~24 mock books that stand in for one.
 | Local infra        | `docker compose` (DynamoDB Local + OTel Collector + Prometheus + Grafana + API) |
 | Orchestration      | ECS Fargate (internal ALB) behind API Gateway, task/service defs in [`ecs/`](ecs/) |
 | CI/CD              | GitHub Actions ([`.github/workflows/`](.github/workflows/)) |
+| Performance tests  | k6 ([`perf/`](perf/)) — manual, against a real deployed environment |
 | Cloud              | AWS — ECR for images, ECS Fargate for compute, DynamoDB for storage, API Gateway + Cognito for auth, OIDC for CD |
 
 ## Quick start
@@ -72,6 +73,7 @@ scripts/teardown.sh    tears all of it back down again
 ecs/              Fargate task/service definitions (see ecs/README.md)
 terraform/        this service's AWS infrastructure (see terraform/README.md)
 tests/            pytest suite (httpx ASGI client)
+perf/             k6 performance tests against a deployed environment (see perf/README.md)
 ```
 
 ## Environments

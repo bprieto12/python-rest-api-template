@@ -25,6 +25,7 @@ targets; the essentials:
 | Types | `make typecheck` (`mypy --strict` on `src/`) |
 | Format + autofix | `make fmt` |
 | Load mock catalogue | `make seed` (add `CREATE_TABLES=1` for local dev, before Terraform owns the tables) |
+| Performance test | `make perf-smoke` / `make perf-load` (k6 — see `perf/README.md`, especially the DynamoDB capacity note before running `perf-load` against anything deployed) |
 | Regenerate lockfile | `uv lock` after editing `pyproject.toml` |
 
 ## Architecture
@@ -117,6 +118,13 @@ traces/metrics/logs, adding/removing an OAuth2 client ("user management"),
 making an authenticated request. Update it alongside any change that shifts
 where observability data lands or how auth actually works, the same way
 `terraform/README.md` gets updated for infrastructure changes.
+
+`.github/workflows/perf.yml` runs k6 (`perf/`) against a real deployed
+environment — `workflow_dispatch` only, never automatic, since it hits the
+network and (for the `load` script) writes real data. See `perf/README.md`
+before running it, especially the note on DynamoDB's fixed provisioned
+capacity (5 RCU/5 WCU) — the default load shape is deliberately
+conservative to stay under that ceiling.
 
 ## Conventions
 

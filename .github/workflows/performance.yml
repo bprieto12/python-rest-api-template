@@ -1,0 +1,53 @@
+name: Performance
+
+# workflow_dispatch only, deliberately — this hits a real deployed
+# environment over the network (unlike ci.yml's fully hermetic tests), and
+# the "load" script writes real data. Never runs automatically on push/PR,
+# so it can't block anything and never fires against an environment nobody
+# asked it to. See perf/README.md, especially the DynamoDB capacity note,
+# before running "load" against anything.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to target
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+      script:
+        description: smoke (fast, read-only, safe anywhere) or load (mixed read/write — read perf/README.md's capacity note first)
+        required: true
+        type: choice
+        options: [smoke, load]
+        default: smoke
+      vus:
+        description: Peak VUs for "load" (ignored by "smoke")
+        required: false
+        default: "5"
+      duration:
+        description: Hold duration at peak VUs for "load", e.g. 1m (ignored by "smoke")
+        required: false
+        default: "1m"
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    # Scopes secrets/vars to the chosen environment's own GitHub
+    # Environment — same BASE_URL/Cognito credentials scripts/bootstrap.sh
+    # already sets there, nothing perf-specific to provision separately.
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run k6 (${{ inputs.script }} against ${{ inputs.environment }})
+        uses: grafana/k6-action@v0.3.1
+        with:
+          filename: performance/${{ inputs.script }}.js
+        env:
+          BASE_URL: https://${{ vars.DOMAIN_NAME }}
+          COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          COGNITO_CLIENT_SECRET: ${{ secrets.COGNITO_CLIENT_SECRET }}
+          COGNITO_DOMAIN: ${{ vars.COGNITO_DOMAIN }}
+          VUS: ${{ inputs.vus }}
+          HOLD_DURATION: ${{ inputs.duration }}

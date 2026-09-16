@@ -4,10 +4,11 @@
 # see terraform/environment.tf), ECR + the ECS execution/task IAM roles (via
 # ecs/bootstrap.sh), a GitHub OIDC provider (shared) + two PER-ENVIRONMENT
 # deploy roles, `terraform apply` in that environment's workspace, and every
-# GitHub Environment secret/variable CD and the Terraform CI workflow need
-# (AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN, DOMAIN_NAME, HOSTED_ZONE_NAME,
-# TF_STATE_BUCKET, ECS_SUBNETS, ECS_SECURITY_GROUPS — all in the
-# $ENVIRONMENT GitHub Environment). Safe to re-run: every step checks
+# GitHub Environment secret/variable CD, the Terraform CI workflow, and the
+# k6 performance workflow need (AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN,
+# COGNITO_CLIENT_SECRET, DOMAIN_NAME, HOSTED_ZONE_NAME, TF_STATE_BUCKET,
+# ECS_SUBNETS, ECS_SECURITY_GROUPS, COGNITO_CLIENT_ID, COGNITO_DOMAIN — all
+# in the $ENVIRONMENT GitHub Environment). Safe to re-run: every step checks
 # before creating/overwriting.
 #
 # Run once per environment, right after cloning this template into a new
@@ -620,19 +621,27 @@ echo "== 6. GitHub Environment '$ENVIRONMENT' secrets/variables =="
 
 SUBNETS="$(cd "$TF_DIR" && terraform output -json private_subnet_ids | python3 -c 'import sys,json; print(",".join(json.load(sys.stdin)))')"
 SG="$(cd "$TF_DIR" && terraform output -raw ecs_security_group_id)"
+COGNITO_CLIENT_ID_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_client_id)"
+COGNITO_CLIENT_SECRET_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_client_secret)"
+COGNITO_DOMAIN_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_domain)"
 
 gh secret set AWS_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$CD_ROLE_ARN"
 gh secret set TF_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$TF_ROLE_ARN"
+gh secret set COGNITO_CLIENT_SECRET --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_CLIENT_SECRET_OUT"
 gh variable set DOMAIN_NAME --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$DOMAIN_NAME"
 gh variable set HOSTED_ZONE_NAME --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$HOSTED_ZONE_NAME"
 gh variable set TF_STATE_BUCKET --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$TF_STATE_BUCKET"
 gh variable set ECS_SUBNETS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SUBNETS"
 gh variable set ECS_SECURITY_GROUPS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SG"
+gh variable set COGNITO_CLIENT_ID --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_CLIENT_ID_OUT"
+gh variable set COGNITO_DOMAIN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_DOMAIN_OUT"
 
-echo "Set: AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN (secrets), DOMAIN_NAME,"
-echo "HOSTED_ZONE_NAME, TF_STATE_BUCKET, ECS_SUBNETS, ECS_SECURITY_GROUPS (variables)"
+echo "Set: AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN, COGNITO_CLIENT_SECRET (secrets),"
+echo "DOMAIN_NAME, HOSTED_ZONE_NAME, TF_STATE_BUCKET, ECS_SUBNETS,"
+echo "ECS_SECURITY_GROUPS, COGNITO_CLIENT_ID, COGNITO_DOMAIN (variables)"
 echo "in the GitHub Environment '$ENVIRONMENT' (created automatically if it"
-echo "didn't already exist)."
+echo "didn't already exist). The COGNITO_* ones feed .github/workflows/performance.yml"
+echo "(k6) — see performance/README.md."
 echo
 echo "Note: ECS_SUBNETS/ECS_SECURITY_GROUPS aren't actually read by any"
 echo "current workflow — they were for cd.yml's old migration-task network"

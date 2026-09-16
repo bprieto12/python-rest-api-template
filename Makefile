@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install-uv install lock fmt lint typecheck test cov run seed up down logs docker-build
+.PHONY: help install-uv install lock fmt lint typecheck test cov run seed up down logs docker-build performance-smoke performance-load
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -48,3 +48,9 @@ logs: ## Tail the api container
 
 docker-build: ## Build the production image
 	docker build -t books-api:local .
+
+performance-smoke: ## k6 smoke test — needs `make up` running, or set BASE_URL/COGNITO_* for a deployed environment
+	k6 run performance/smoke.js
+
+performance-load: ## k6 load test — see performance/README.md's DynamoDB capacity note before pointing this at a deployed environment
+	k6 run performance/load.js
