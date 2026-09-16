@@ -42,3 +42,8 @@ output "alerts_topic_arn" {
   description = "Subscribe yourself: aws sns subscribe --topic-arn <this> --protocol email --notification-endpoint you@example.com"
   value       = aws_sns_topic.alerts.arn
 }
+
+output "dashboard_url" {
+  description = "Direct console link to the CloudWatch dashboard (dashboard.tf)."
+  value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.this.dashboard_name}"
+}

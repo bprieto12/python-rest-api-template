@@ -10,3 +10,14 @@ resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${local.name_prefix}"
   retention_in_days = 1
 }
+
+# API Gateway access logs — the destination referenced by
+# aws_apigatewayv2_stage.default's access_log_settings (api_gateway.tf).
+# Same 1-day retention choice as above, for the same reason. This is what
+# closes the "no per-request record of who called what" gap docs/RUNBOOK.md
+# used to call out under "How to view logs" — see dashboard.tf for what
+# reads it.
+resource "aws_cloudwatch_log_group" "api_gateway_access" {
+  name              = "/aws/apigateway/${local.name_prefix}"
+  retention_in_days = 1
+}

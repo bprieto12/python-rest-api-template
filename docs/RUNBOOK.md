@@ -187,12 +187,21 @@ depending on which layer you care about:
 | `AWS/ApiGateway` | Request count, latency, 4xx/5xx counts at the gateway — published automatically, no extra config. Currently your **only** signal for "how many requests the JWT authorizer is rejecting" (see the gap noted under logs) |
 | `AWS/ApplicationELB` | Request count/latency/5xx between API Gateway and ECS specifically — lets you tell a gateway-level rejection apart from a backend-level failure |
 
-Console: CloudWatch → Metrics → browse by namespace, or build a Dashboard
-from the ones you check often. If you'd rather use Grafana than live in the
-CloudWatch console: point your existing local Grafana instance at CloudWatch
-as a data source (native support, no new AWS infrastructure needed) — see
-the note in `terraform/README.md` if you want to go further and replicate
-the local Prometheus/Grafana setup for real in AWS.
+**Fastest path: the CloudWatch dashboard** (`terraform/dashboard.tf`,
+recreated on every `apply` like everything else here) — `terraform output
+-raw dashboard_url`, or CloudWatch → Dashboards → `books-api`
+(`books-api-staging` for staging). It covers API performance (status
+codes, top routes, top consumers, request rate, p95 latency), infrastructure
+(ECS task counts, per-task CPU/Memory — there are no EC2 hosts on Fargate,
+so "per host" there means per-task), and DynamoDB capacity/latency, all in
+one place.
+
+Otherwise: CloudWatch → Metrics → browse by namespace. If you'd rather use
+Grafana than live in the CloudWatch console: point your existing local
+Grafana instance at CloudWatch as a data source (native support, no new AWS
+infrastructure needed) — see the note in `terraform/README.md` if you want
+to go further and replicate the local Prometheus/Grafana setup for real in
+AWS.
 
 ### Alerting
 
@@ -255,15 +264,30 @@ the `api/` stream (`_QuietHealthChecks` in `main.py`) — don't be surprised
 not to see routine `/healthz`/`/readyz` noise; a *failing* health check still
 logs normally, since that's the one case actually worth seeing.
 
-**Known gap:** API Gateway has no access logging configured
-(`aws_apigatewayv2_stage` has no `access_log_settings`). There is currently
-no per-request record anywhere of who called what, when, or whether the JWT
-authorizer accepted or rejected them — only the aggregate 4xx/5xx *count* in
-`AWS/ApiGateway` metrics above. If you need to debug why one specific
-caller's request was rejected, that's not currently possible after the
-fact. Adding an `aws_cloudwatch_log_group` + `access_log_settings` on the
-stage is the fix, whenever that need actually shows up — not built
-preemptively.
+**API Gateway access logs**, log group **`/aws/apigateway/books-api`**
+(`terraform/logs.tf`'s `api_gateway_access` group, wired up via
+`access_log_settings` on `terraform/api_gateway.tf`'s stage). One JSON line
+per request: path, HTTP method, status, request/integration/response
+latency, source IP, and — pulled straight out of the validated JWT —
+`consumer` (the caller's Cognito `client_id`). This is what the dashboard's
+Top Routes/Top Consumers/status-code widgets read from
+(`terraform/dashboard.tf`).
+
+To debug why one specific caller's request was rejected or slow:
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /aws/apigateway/books-api \
+  --filter-pattern '{ $.status = 401 }'
+```
+
+or via CloudWatch Logs Insights (console, or `aws logs start-query`):
+
+```
+fields @timestamp, consumer, path, status, responseLatency, authorizerError
+| filter consumer = "<client_id>"
+| sort @timestamp desc
+```
 
 ## User Management
 
@@ -278,10 +302,15 @@ request-path reasoning.
 Right now there's **one shared app client**, `books-api-client`
 (`terraform/cognito.tf`), used by every caller. That's fine while there's
 one real consumer; once there's more than one, giving each its own client is
-worth doing so you can tell them apart in metrics and revoke one without
-touching the others (concretely: right now you can't distinguish which
-caller is responsible for a given `AWS/ApiGateway` 4xx, or for read vs. write
-DynamoDB load — everyone shares the same identity).
+worth doing so you can revoke one without touching the others, and so
+"Top Consumers" on the dashboard (and the `consumer` field in the API
+Gateway access log — see "How to view logs" above) actually distinguishes
+callers instead of showing one entry for everyone. The aggregate
+`AWS/ApiGateway` *metrics* still can't be split per caller (that's a
+per-request log fact, not something CloudWatch's own API Gateway metrics
+carry a dimension for) — but per-request attribution, which is the thing
+you'd reach for first when debugging one caller's behavior, already works
+today off the access log alone.
 
 **To add a new caller**, add another client to `terraform/cognito.tf`:
 
