@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.10.5" # bump alongside required_version in versions.tf; must stay >= 1.10 for native S3 state locking
+          terraform_version: "1.16.2" # bump alongside required_version in versions.tf; must stay >= 1.10 for native S3 state locking
       - working-directory: terraform
         run: terraform fmt -check -recursive
 
@@ -80,7 +80,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.10.5" # must stay >= 1.10 for native S3 state locking (use_lockfile)
+          terraform_version: "1.16.2" # must stay >= 1.10 for native S3 state locking (use_lockfile)
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -127,7 +127,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.10.5"
+          terraform_version: "1.16.2"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
