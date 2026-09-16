@@ -77,6 +77,18 @@ script's header for exactly what it does and doesn't remove (it never
 touches the shared ECR repo or state bucket, since production still needs
 them).
 
+**Don't run this at the same time you're pushing/merging to `main`.**
+`terraform.yml` auto-applies to staging on every push to `main` (see
+"Release flow" above) — running `bootstrap.sh` for staging concurrently
+with a push races the two applies against the same state. Terraform's
+native S3 locking prevents them from corrupting each other's state, but
+the loser still sees real AWS-side collisions (`ResourceInUseException`,
+"already exists") on whatever the winner already created, which looks
+alarming even though nothing is actually broken — check `terraform state
+list` in that workspace to confirm before assuming otherwise. Simplest
+fix: do the first-time bootstrap in a moment with no in-flight push to
+`main`, then let CD/CI own it from there.
+
 ### Migrating an existing production to a named workspace
 
 This only applies once, to a books-api deployment that predates staging
