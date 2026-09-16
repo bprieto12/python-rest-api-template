@@ -77,13 +77,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Scan image for vulnerabilities (report only)
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: books-api:ci
           severity: CRITICAL,HIGH
           exit-code: "0" # visibility only — see the gated CRITICAL-only step below
       - name: Scan image for vulnerabilities (fails the build)
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: books-api:ci
           severity: CRITICAL
