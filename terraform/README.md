@@ -269,6 +269,18 @@ per environment, so read it there for the literal JSON. The shape:
   scope them. (The cluster/service actions in the same statement group
   *do* get scoped to this environment's own cluster/service ARNs — see
   `scripts/bootstrap.sh`'s `EcsClusterAndService` statement.)
+- **`logs:CreateLogDelivery`/`GetLogDelivery`/`UpdateLogDelivery`/
+  `DeleteLogDelivery`/`ListLogDeliveries`/`PutResourcePolicy`/
+  `DescribeResourcePolicies` (`ApiGatewayAccessLogDelivery`) are
+  `Resource: "*"`** — enabling `access_log_settings` on the
+  `aws_apigatewayv2_stage` (`api_gateway.tf`, `dashboard.tf`'s data source)
+  routes through CloudWatch's "Log Delivery" service under the hood rather
+  than writing to the destination log group directly, and none of those
+  delivery actions support resource-level scoping (the delivery resource
+  doesn't exist yet at the time `CreateLogDelivery` is called — same class
+  of gap as Cognito's opaque IDs above). The log *group* itself stays
+  scoped (`LogsThisEnvironmentsGroup`) — only the delivery-pipe actions are
+  wide.
 - ECS cluster/service, SNS, and CloudWatch (Alarms and Logs) each also
   needed a `ListTagsForResource`/`ListTagsLogGroup`-style read action added
   alongside the obvious `TagResource` write — the same class of gap as
