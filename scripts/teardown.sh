@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Tears down everything scripts/bootstrap.sh built, in reverse: terraform
-# destroy first (while the roles it needs still exist), then the ECR repo,
-# the four IAM roles, the state bucket, and the GitHub Environment
-# secrets/variables bootstrap.sh set.
+# Tears down everything scripts/bootstrap.sh built FOR ONE ENVIRONMENT, in
+# reverse: terraform destroy first (while the roles it needs still exist),
+# then the ECR repo (only for production — see below), that environment's
+# 4 IAM roles, and that environment's GitHub Environment secrets/variables.
+# The state bucket is shared across environments, so it's only ever deleted
+# when tearing down production, and only if no other environment's state
+# still lives in it.
 #
 # Does NOT touch your Route 53 hosted zone or domain — safe by construction,
 # not just by care: hosted_zone_name is read via a `data` source
@@ -15,13 +18,20 @@
 # specific to this one service.
 #
 # Usage:
-#   ./scripts/teardown.sh                  # asks for confirmation first
-#   AUTO_APPROVE=1 ./scripts/teardown.sh    # no prompts (CI, etc.)
+#   HOSTED_ZONE_NAME=example.com DOMAIN_NAME=staging.books-api.example.com \
+#     ENVIRONMENT=staging ./scripts/teardown.sh     # asks for confirmation first
+#   AUTO_APPROVE=1 ENVIRONMENT=staging ./scripts/teardown.sh    # no prompts (CI, etc.)
 #
-#   Optional: AWS_REGION (default us-east-1), TF_STATE_BUCKET (default
-#   books-api-tfstate-<account-id> — override to match what bootstrap.sh
-#   actually used if you set one explicitly then), GITHUB_REPO (owner/repo
-#   — default: read from `gh repo view`).
+#   HOSTED_ZONE_NAME/DOMAIN_NAME must match what this environment was
+#   applied with — terraform destroy still evaluates the config (including
+#   the hosted_zone_name data source lookup) to build its plan, so wrong or
+#   missing values can block it even though nothing here is being created.
+#
+#   Optional: AWS_REGION (default us-east-1), ENVIRONMENT (default
+#   production), TF_STATE_BUCKET (default books-api-tfstate-<account-id> —
+#   override to match what bootstrap.sh actually used if you set one
+#   explicitly then), GITHUB_REPO (owner/repo — default: read from `gh repo
+#   view`).
 
 set -euo pipefail
 
@@ -29,6 +39,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TF_DIR="$REPO_ROOT/terraform"
 AWS_REGION="${AWS_REGION:-us-east-1}"
+ENVIRONMENT="${ENVIRONMENT:-production}"
+if [ "$ENVIRONMENT" = "production" ]; then
+  NAME_PREFIX="books-api"
+else
+  NAME_PREFIX="books-api-$ENVIRONMENT"
+fi
 
 for cmd in aws terraform gh python3; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing required tool: $cmd" >&2; exit 1; }
@@ -39,15 +55,22 @@ REPO_NWO="${GITHUB_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-books-api-tfstate-$ACCOUNT_ID}"
 
 cat <<EOF
-This will DESTROY every AWS resource scripts/bootstrap.sh created for
-books-api in account $ACCOUNT_ID:
+This will DESTROY every AWS resource scripts/bootstrap.sh created for the
+"$ENVIRONMENT" environment of books-api in account $ACCOUNT_ID:
   - VPC, ALB, ECS cluster/service
   - Both DynamoDB tables, and everything in them
   - Cognito (user pool, app client) and API Gateway
-  - The ECR repo books-api, and any images in it
-  - The state bucket ($TF_STATE_BUCKET)
-  - 4 IAM roles (books-api-execution, books-api-task, books-api-cd, books-api-terraform)
-  - The GitHub Environment "production" secrets/variables bootstrap.sh set
+  - The SNS alerts topic and its CloudWatch Alarms (any email/webhook you
+    subscribed to it is dropped along with the topic — re-subscribe if you
+    bootstrap this again)
+  - 4 IAM roles ($NAME_PREFIX-execution, $NAME_PREFIX-task, $NAME_PREFIX-cd, $NAME_PREFIX-terraform)
+  - The GitHub Environment "$ENVIRONMENT" secrets/variables bootstrap.sh set
+$(if [ "$ENVIRONMENT" = "production" ]; then
+  echo "  - The ECR repo books-api, and any images in it (shared — deleting it also removes staging's images)"
+  echo "  - The state bucket ($TF_STATE_BUCKET) — ONLY if this is the last environment left in it"
+else
+  echo "  (the ECR repo and the shared state bucket are left alone — production and any other environment still use them)"
+fi)
 
 Your Route 53 hosted zone/domain is NOT touched — it was never Terraform-
 managed to begin with (see terraform/route53.tf). The GitHub OIDC provider
@@ -62,16 +85,38 @@ if [ "${AUTO_APPROVE:-}" != "1" ]; then
 fi
 echo
 
-echo "== 1. terraform destroy =="
+if [ -f "$TF_DIR/terraform.tfvars" ]; then
+  echo "Note: $TF_DIR/terraform.tfvars exists (likely leftover from before" >&2
+  echo "multiple environments existed here) — the -var flags below take" >&2
+  echo "precedence over it regardless, so this is safe, but consider" >&2
+  echo "deleting it; see bootstrap.sh for the full explanation." >&2
+  echo >&2
+fi
+
+echo "== 1. terraform destroy (workspace: $ENVIRONMENT) =="
 
 if [ -f "$TF_DIR/backend.hcl" ]; then
   (
     cd "$TF_DIR"
     [ -d .terraform ] || terraform init -backend-config=backend.hcl
-    if [ "${AUTO_APPROVE:-}" = "1" ]; then
-      terraform destroy -var-file=terraform.tfvars -auto-approve
+    if terraform workspace list | tr -d '* ' | grep -qxF "$ENVIRONMENT"; then
+      terraform workspace select "$ENVIRONMENT"
+      : "${HOSTED_ZONE_NAME:?Set HOSTED_ZONE_NAME/DOMAIN_NAME to the same values this environment was applied with — destroy still evaluates the config (including the hosted_zone_name data source lookup), so a wrong or missing value can block it}"
+      : "${DOMAIN_NAME:?See the HOSTED_ZONE_NAME message above}"
+      # -var, not TF_VAR_* env vars — -var has the HIGHEST precedence in
+      # Terraform, so it can't be silently shadowed by a leftover
+      # terraform.tfvars from an old single-environment setup. See the same
+      # note in bootstrap.sh.
+      if [ "${AUTO_APPROVE:-}" = "1" ]; then
+        terraform destroy -auto-approve \
+          -var "hosted_zone_name=$HOSTED_ZONE_NAME" -var "domain_name=$DOMAIN_NAME"
+      else
+        terraform destroy \
+          -var "hosted_zone_name=$HOSTED_ZONE_NAME" -var "domain_name=$DOMAIN_NAME"
+      fi
     else
-      terraform destroy -var-file=terraform.tfvars
+      echo "No Terraform workspace named '$ENVIRONMENT' — nothing to destroy" >&2
+      echo "(either already torn down, or never applied here)." >&2
     fi
   )
 else
@@ -82,7 +127,10 @@ echo
 
 echo "== 2. ECR repo =="
 
-if aws ecr describe-repositories --repository-names books-api --region "$AWS_REGION" >/dev/null 2>&1; then
+if [ "$ENVIRONMENT" != "production" ]; then
+  echo "Skipping — the ECR repo is shared across environments; it's only"
+  echo "deleted when tearing down production."
+elif aws ecr describe-repositories --repository-names books-api --region "$AWS_REGION" >/dev/null 2>&1; then
   aws ecr delete-repository --repository-name books-api --region "$AWS_REGION" --force >/dev/null
   echo "Deleted (including any images in it)"
 else
@@ -110,14 +158,31 @@ delete_role() {
   echo "$role_name: deleted"
 }
 
-for role in books-api-execution books-api-task books-api-cd books-api-terraform; do
+for role in "${NAME_PREFIX}-execution" "${NAME_PREFIX}-task" "${NAME_PREFIX}-cd" "${NAME_PREFIX}-terraform"; do
   delete_role "$role"
 done
 echo
 
-echo "== 4. Terraform state bucket =="
+echo "== 4. Terraform workspace cleanup + (production-only) state bucket =="
+# The state bucket is shared across every environment (isolated by
+# workspace, not by bucket — see terraform/environment.tf), so it's only
+# ever a candidate for deletion here, never unconditionally deleted.
 
-if aws s3api head-bucket --bucket "$TF_STATE_BUCKET" 2>/dev/null; then
+if [ -d "$TF_DIR/.terraform" ]; then
+  (cd "$TF_DIR" && terraform workspace select default >/dev/null 2>&1 && terraform workspace delete "$ENVIRONMENT" >/dev/null 2>&1) \
+    && echo "Deleted the now-empty '$ENVIRONMENT' Terraform workspace" \
+    || echo "Could not delete the '$ENVIRONMENT' workspace automatically (already gone, or it wasn't empty — check for leftover resources)."
+fi
+
+if [ "$ENVIRONMENT" != "production" ]; then
+  echo "Leaving the shared state bucket ($TF_STATE_BUCKET) in place —"
+  echo "other environments still use it."
+elif aws s3api list-objects-v2 --bucket "$TF_STATE_BUCKET" --prefix "env:/" --query 'Contents[0].Key' --output text 2>/dev/null | grep -qv '^None$'; then
+  echo "Other environments still have state in $TF_STATE_BUCKET (non-default"
+  echo "Terraform workspaces live under its env:/ prefix) — leaving the"
+  echo "bucket in place. Tear down every other environment first if you"
+  echo "really want it gone, then re-run this for production."
+elif aws s3api head-bucket --bucket "$TF_STATE_BUCKET" 2>/dev/null; then
   # Versioned bucket — deleting the bucket needs every version AND every
   # delete marker gone first, not just the current versions (plain
   # `s3 rm --recursive` only adds delete markers, it doesn't remove what's
@@ -149,15 +214,15 @@ else
 fi
 echo
 
-echo "== 5. GitHub Environment 'production' secrets/variables =="
+echo "== 5. GitHub Environment '$ENVIRONMENT' secrets/variables =="
 
 if [ -n "$REPO_NWO" ]; then
   for s in AWS_DEPLOY_ROLE_ARN TF_DEPLOY_ROLE_ARN; do
-    gh secret delete "$s" --env production --repo "$REPO_NWO" 2>/dev/null \
+    gh secret delete "$s" --env "$ENVIRONMENT" --repo "$REPO_NWO" 2>/dev/null \
       && echo "$s: deleted" || echo "$s: already gone"
   done
   for v in DOMAIN_NAME HOSTED_ZONE_NAME TF_STATE_BUCKET ECS_SUBNETS ECS_SECURITY_GROUPS; do
-    gh variable delete "$v" --env production --repo "$REPO_NWO" 2>/dev/null \
+    gh variable delete "$v" --env "$ENVIRONMENT" --repo "$REPO_NWO" 2>/dev/null \
       && echo "$v: deleted" || echo "$v: already gone"
   done
 else
@@ -166,6 +231,6 @@ else
 fi
 echo
 
-echo "== Done =="
+echo "== Done ($ENVIRONMENT) =="
 echo "Route 53 (hosted zone/domain) and the GitHub OIDC provider were left"
 echo "untouched, as documented at the top of this script."

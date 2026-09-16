@@ -1,19 +1,24 @@
 # Copy to terraform.tfvars (gitignored) and fill in real values, or pass
-# equivalent -var flags.
+# equivalent -var flags — or, since hosted_zone_name/domain_name differ per
+# environment, export TF_VAR_hosted_zone_name/TF_VAR_domain_name instead of
+# a file at all (what scripts/bootstrap.sh and the GitHub Actions workflows
+# do), so the same file doesn't need editing between `terraform workspace
+# select production` and `... select staging`.
 #
 # Execution/task role ARNs, image, and container port aren't here — they're
-# already in ../ecs/task-definition.json; edit that file, not this one, to
-# change them.
+# already in ../ecs/task-definition.<environment>.json; edit that file, not
+# this one, to change them. There's no "cluster_name" variable either — the
+# cluster (and every other resource) is named from `terraform.workspace`,
+# see environment.tf.
 
 aws_region = "us-east-1"
 
 hosted_zone_name = "example.com"              # must already exist in Route 53
-domain_name      = "books-api.example.com"
+domain_name      = "books-api.example.com"    # per-environment — e.g. staging.books-api.example.com in the staging workspace
 
 # Defaults are usually fine to leave as-is:
 # vpc_cidr           = "10.0.0.0/16"
 # az_count           = 2
 # single_nat_gateway = true
-# cluster_name       = "books-api"
 # health_check_path  = "/healthz"
 # desired_count      = 2

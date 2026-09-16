@@ -76,14 +76,27 @@ client. See `tests/conftest.py`.
 ## Deploy pipeline
 
 `.github/workflows/ci.yml` runs lint + mypy + tests (fully hermetic — no
-service containers) + a Docker build with a `/healthz` smoke test, on every PR.
+service containers) + a Docker build with a `/healthz` smoke test, plus
+dependency (`pip-audit`) and container image (Trivy, CRITICAL-only gate —
+HIGH is reported but doesn't fail the build yet) vulnerability scanning, on
+every PR. `.github/dependabot.yml` complements the scans with weekly PRs
+bumping dependency/action/base-image versions proactively.
 
-`.github/workflows/cd.yml` runs on push to `main` / `v*` tags: assumes an AWS IAM
-role via **GitHub OIDC** (`secrets.AWS_DEPLOY_ROLE_ARN`), builds and pushes to
-**ECR** tagged with the commit SHA, registers a new `ecs/task-definition.json`
-revision, then `aws ecs update-service --force-new-deployment` and waits for
-the rollout to stabilize. There's no migration step — DynamoDB is schemaless,
-so there's nothing for a migration task to do.
+**Two environments, staging and production**, same config applied twice via
+Terraform workspaces (`terraform/environment.tf`) — production keeps every
+resource name as it was before staging existed (unsuffixed); staging gets
+`-staging` appended. `.github/workflows/cd.yml` deploys to **staging** on
+every push to `main`, and to **production** on a `v*` tag (reusing the exact
+image already built for that commit, never rebuilding) — assumes an AWS IAM
+role via **GitHub OIDC** (`secrets.AWS_DEPLOY_ROLE_ARN`, a *different* role
+per environment/GitHub-Environment), builds and pushes to the shared **ECR**
+repo tagged with the commit SHA, registers a new
+`ecs/task-definition.<environment>.json` revision, then `aws ecs
+update-service --force-new-deployment` and waits for the rollout to
+stabilize. There's no migration step — DynamoDB is schemaless, so there's
+nothing for a migration task to do. See `docs/RUNBOOK.md`'s "Environments"
+section for the full release flow and the one-time production state
+migration a pre-existing (pre-workspace) deployment needs.
 
 `terraform/` owns everything that isn't re-applied on every deploy: a
 dedicated VPC, the ECS cluster, an *internal* ALB (with ACM cert), the target
@@ -92,11 +105,12 @@ tokens), API Gateway (the actual public entry point — a JWT authorizer checks
 every request against Cognito before it reaches the VPC Link -> ALB -> ECS,
 with one Route 53 record now aliasing API Gateway rather than the ALB
 directly), and the initial ECS service + task definition revision — created
-once via `terraform apply` (locally, or via `.github/workflows/terraform.yml`'s
-`workflow_dispatch`), not something CD re-applies; CD only registers new task
-definition revisions and calls `update-service`. See `terraform/README.md`'s
-"Request path"/"Auth" sections for the full flow. Per-account placeholders and
-IAM role requirements are in `ecs/README.md` and `terraform/README.md`.
+once per environment via `terraform apply` in that environment's workspace
+(locally, or via `.github/workflows/terraform.yml`'s `workflow_dispatch`),
+not something CD re-applies; CD only registers new task definition revisions
+and calls `update-service`. See `terraform/README.md`'s "Request path"/"Auth"
+sections for the full flow. Per-account placeholders and IAM role
+requirements are in `ecs/README.md` and `terraform/README.md`.
 
 `docs/RUNBOOK.md` covers operating the deployed service day-to-day — viewing
 traces/metrics/logs, adding/removing an OAuth2 client ("user management"),

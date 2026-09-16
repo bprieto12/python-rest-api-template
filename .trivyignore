@@ -1,0 +1,38 @@
+# Suppressions for `.github/workflows/ci.yml`'s CRITICAL-gated Trivy scan.
+#
+# Every entry here is a Debian *bookworm* OS package CVE with NO fix
+# available in that release as of the date checked — confirmed directly
+# against https://security-tracker.debian.org/tracker/<CVE-ID>, not just
+# "Trivy says affected." None come from this app's own Python
+# dependencies (those are covered separately by `pip-audit` in the same
+# workflow, and Dependabot). Bumping/rebuilding the base image does not
+# fix any of these — Debian has explicitly decided not to backport them
+# to bookworm, for the reasons noted per entry below.
+#
+# `exp:` dates force these back into the failing/gated set periodically
+# so they get re-checked rather than silently ignored forever — if a fix
+# lands upstream before then, remove the line early instead of waiting.
+
+# libsqlite3-0 — SQLite integer overflow via a crafted SELECT with a very
+# large number of ORDER BY expressions, requires the attacker already be
+# able to execute arbitrary SQL. This app has no SQL execution surface at
+# all (storage is DynamoDB — see repository.py's module docstring); this
+# package is just part of the base image. Debian: bookworm <no-dsa>
+# "Minor issue" — will not be fixed in bookworm.
+CVE-2025-7458 exp:2026-12-15
+
+# perl-base — three CVEs, all Debian bookworm <no-dsa>/<postponed>/
+# untriaged with no fixed version in bookworm today (fixed only in
+# trixie+). This app never invokes perl; it's part of the base image's
+# essential package set, not something the application calls into.
+CVE-2026-13221 exp:2026-12-15
+CVE-2026-42496 exp:2026-12-15
+CVE-2026-8376 exp:2026-12-15
+
+# zlib1g — the vulnerable code is in contrib/minizip, which Debian
+# explicitly does NOT build into its zlib1g package at all
+# ("<ignored> contrib/minizip not built and src:zlib not producing
+# binary packages") — the vulnerable code path doesn't exist in this
+# image regardless of version. Effectively a false positive relative to
+# what's actually shipped.
+CVE-2023-45853 exp:2026-12-15

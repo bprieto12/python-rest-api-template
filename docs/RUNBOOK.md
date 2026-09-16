@@ -4,7 +4,135 @@ Operating this service day-to-day — as opposed to `terraform/README.md` and
 `ecs/README.md`, which cover *building* it. This assumes it's already
 deployed per those docs.
 
+## Environments
+
+There are two: **staging** and **production**. They're the same Terraform
+config (`terraform/`) applied twice, once per **Terraform workspace**
+(`terraform.workspace` — see `terraform/environment.tf`), which is what
+actually keeps their state and resources apart; there is no separate
+directory or module per environment.
+
+Naming follows one rule everywhere (`local.name_prefix` in
+`terraform/environment.tf`): **production keeps every name exactly as it
+was before staging existed** (`books-api`, `/ecs/books-api`, the
+`books-api` ECS cluster/service, and so on — everything this runbook's
+other sections reference by that literal name); staging gets `-staging`
+appended (`books-api-staging`, `/ecs/books-api-staging`, ...). The same
+rule applies to the IAM deploy roles (`books-api-cd`/`books-api-terraform`
+vs. `books-api-staging-cd`/`books-api-staging-terraform`) and to the
+GitHub Environments the CD/Terraform workflows read secrets and variables
+from ("production" vs. "staging"). The one deliberate exception is the
+Cognito resource server identifier (`books-api`, unchanged in both) — see
+the comment in `terraform/cognito.tf` for why.
+
+### Release flow
+
+- **Push to `main`** → deploys to **staging** automatically.
+- **Push a `v*` tag** → deploys to **production**. `.github/workflows/cd.yml`
+  reuses the exact image already built and pushed for that commit (by the
+  `main` push that got it into staging) rather than rebuilding — production
+  always runs the literal artifact staging already ran, never a
+  fresh-but-nominally-identical build.
+- **`workflow_dispatch`** on `cd.yml` deploys either environment on demand
+  (a redeploy with no new commit — e.g. after an infra-only change),
+  bypassing both triggers above.
+
+There's no automated promotion gate (a staging smoke test that has to pass
+before a tag can go out) — tagging `v*` is a human decision. Add one later
+if staging failures start reaching production tags in practice; not built
+preemptively.
+
+`.github/workflows/terraform.yml` mirrors the same release flow exactly:
+a PR touching `terraform/` plans **both** environments (a change can affect
+them differently — e.g. something that only breaks once staging's
+smaller/newer setup, or once production's free-tier capacity is already
+spoken for); a push to `main` **auto-applies to staging**; pushing a `v*`
+tag **auto-applies to production** — a release promotes whatever's in
+`terraform/` at that commit, the same way it promotes the already-built
+image. This is deliberately unconditional on whether that specific commit
+touched `terraform/` (unlike the PR trigger) — re-applying unchanged config
+is a fast no-op, and a release should mean "production now matches what's
+tagged" in every respect, infra included, not just the image.
+`workflow_dispatch` is for an on-demand re-apply of either environment with
+no new commit/tag (e.g. after fixing a failed apply, or an infra-only
+change that shouldn't wait for the next release).
+
+### Setting up staging for the first time
+
+If production already exists but staging doesn't yet:
+
+```bash
+HOSTED_ZONE_NAME=example.com DOMAIN_NAME=staging.books-api.example.com \
+  ENVIRONMENT=staging ./scripts/bootstrap.sh
+```
+
+This creates a `staging` Terraform workspace, a full parallel set of AWS
+resources under the `books-api-staging` name, `books-api-staging-cd`/
+`books-api-staging-terraform` IAM roles trusted only for OIDC tokens minted
+for the "staging" GitHub Environment, and the "staging" GitHub Environment
+itself (created automatically the first time a secret/variable is set on
+it) with its own `AWS_DEPLOY_ROLE_ARN`/`TF_DEPLOY_ROLE_ARN`/`DOMAIN_NAME`/
+etc. `scripts/teardown.sh ENVIRONMENT=staging` reverses it; see that
+script's header for exactly what it does and doesn't remove (it never
+touches the shared ECR repo or state bucket, since production still needs
+them).
+
+### Migrating an existing production to a named workspace
+
+This only applies once, to a books-api deployment that predates staging
+existing at all — its Terraform state is sitting in the **unnamed
+`default`** workspace, not a workspace literally named `production`, since
+workspaces didn't exist in this repo's Terraform config yet when it was
+first applied. `terraform/environment.tf`'s `check` block refuses to
+*apply* in the `default` workspace itself, but that alone doesn't stop
+someone from bootstrapping a *different*, freshly-created named workspace
+while `default` still holds the real infrastructure — which is exactly
+what happened once already: a fresh `production` workspace tried to build
+a second copy of everything already live under `default`, producing a mix
+of "already exists" errors and silently-adopted real resources (anything
+AWS treats as idempotent-by-name — ECS clusters, SNS topics, CloudWatch
+alarms — just got quietly repointed rather than erroring). `scripts/bootstrap.sh`
+now hard-stops before doing anything if `default` still holds any
+resources at all, specifically to make that scenario impossible — but the
+migration below is still what actually resolves it, not just a check to
+get past.
+
+**Back up state before touching any of this:**
+
+```bash
+cd terraform
+terraform init -backend-config=backend.hcl   # if not already initialized
+terraform workspace select default
+terraform state pull > /tmp/books-api-default-state-backup.json
+```
+
+Then move that state into a real `production` workspace and confirm
+nothing changed:
+
+```bash
+terraform workspace new production
+terraform state push /tmp/books-api-default-state-backup.json
+terraform plan   # with TF_VAR_hosted_zone_name / TF_VAR_domain_name set as usual
+```
+
+That `plan` must come back **empty** ("No changes."). If it doesn't, stop —
+don't apply — and compare against the backup file before doing anything
+else; an empty plan is the only real confirmation this went cleanly, not
+just "the commands didn't error." Once confirmed, delete the now-empty
+`default` workspace (`terraform workspace select production && terraform
+workspace delete default`) so nothing accidentally gets applied there
+again, and update the CD/Terraform IAM roles for production (see "Setting
+up staging for the first time" above — the same `scripts/bootstrap.sh`
+invocation you'd use for a new environment also refreshes an existing
+one's trust policy/secrets safely, since every step in it checks before
+creating or overwriting).
+
 ## Observability / Production Support
+
+Everything below names resources as they exist in **production**
+(`books-api`, `/ecs/books-api`, ...) — for staging, append `-staging` to
+every resource name (`books-api-staging`, `/ecs/books-api-staging`, ...);
+see "Environments" above.
 
 ### How to view traces
 
@@ -53,6 +181,42 @@ CloudWatch console: point your existing local Grafana instance at CloudWatch
 as a data source (native support, no new AWS infrastructure needed) — see
 the note in `terraform/README.md` if you want to go further and replicate
 the local Prometheus/Grafana setup for real in AWS.
+
+### Alerting
+
+`terraform/alarms.tf` operationalizes a handful of SLOs as CloudWatch
+Alarms, all publishing to one SNS topic (`books-api-alerts`):
+
+| Alarm | SLO it enforces | Threshold |
+| --- | --- | --- |
+| `books-api-unhealthy-targets` | The service is actually up | Any ECS target unhealthy behind the ALB, for 3 straight minutes |
+| `books-api-gateway-5xx` | Availability | 5+ 5xx responses from API Gateway in a 5-minute window |
+| `books-api-gateway-latency-p99` | Latency | p99 integration latency above 3s for 15 straight minutes |
+| `books-api-dynamodb-throttles-{books,isbns}` | The data layer has headroom | Any throttled DynamoDB request in a 5-minute window |
+
+These are deliberately generous starting thresholds picked without a real
+traffic baseline to tune against (see `alarms.tf`'s comments for the
+reasoning on each) — tighten them once actual traffic gives you something
+to hold the service to. "5+ 5xx" and "p99 latency" specifically are simple
+counts/single-metric statistics rather than computed error rates, since this
+service doesn't have enough steady traffic yet for a percentage-based
+threshold to mean much; revisit as metric-math expressions once it does.
+
+**Nothing is subscribed to the alerts topic by default** — an email address
+or webhook isn't something this repo creates or stores on your behalf.
+Subscribe yourself, once:
+
+```bash
+aws sns subscribe --topic-arn "$(terraform output -raw alerts_topic_arn)" \
+  --protocol email --notification-endpoint you@example.com
+```
+
+AWS emails a confirmation link to that address — nothing arrives until you
+click it. (Slack/PagerDuty/etc. instead of email: subscribe an SNS→webhook
+integration the same way, just a different `--protocol`/endpoint.)
+
+To see alarm history/current state: CloudWatch → Alarms — or
+`aws cloudwatch describe-alarms --alarm-name-prefix books-api`.
 
 ### How to view logs
 

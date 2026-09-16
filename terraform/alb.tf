@@ -12,7 +12,7 @@
 # domain and cert); this hop is entirely inside the VPC, reachable only from
 # the VPC Link's own ENIs, and never touches the public internet.
 resource "aws_lb" "this" {
-  name               = "books-api"
+  name               = local.name_prefix
   internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]

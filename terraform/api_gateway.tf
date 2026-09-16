@@ -5,12 +5,12 @@
 # path entirely — it polls the ECS tasks directly, not through the gateway).
 
 resource "aws_apigatewayv2_api" "this" {
-  name          = "books-api"
+  name          = local.name_prefix
   protocol_type = "HTTP"
 }
 
 resource "aws_apigatewayv2_vpc_link" "this" {
-  name               = "books-api"
+  name               = local.name_prefix
   security_group_ids = [aws_security_group.vpc_link.id]
   subnet_ids         = aws_subnet.private[*].id
 }

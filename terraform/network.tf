@@ -16,12 +16,12 @@ resource "aws_vpc" "this" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = { Name = "books-api" }
+  tags = { Name = local.name_prefix }
 }
 
 resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
-  tags   = { Name = "books-api" }
+  tags   = { Name = local.name_prefix }
 }
 
 resource "aws_subnet" "public" {
@@ -31,7 +31,7 @@ resource "aws_subnet" "public" {
   availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = true
 
-  tags = { Name = "books-api-public-${local.azs[count.index]}" }
+  tags = { Name = "${local.name_prefix}-public-${local.azs[count.index]}" }
 }
 
 resource "aws_subnet" "private" {
@@ -40,20 +40,20 @@ resource "aws_subnet" "private" {
   cidr_block        = local.private_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
-  tags = { Name = "books-api-private-${local.azs[count.index]}" }
+  tags = { Name = "${local.name_prefix}-private-${local.azs[count.index]}" }
 }
 
 resource "aws_eip" "nat" {
   count  = var.single_nat_gateway ? 1 : var.az_count
   domain = "vpc"
-  tags   = { Name = "books-api-nat-${count.index}" }
+  tags   = { Name = "${local.name_prefix}-nat-${count.index}" }
 }
 
 resource "aws_nat_gateway" "this" {
   count         = var.single_nat_gateway ? 1 : var.az_count
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
-  tags          = { Name = "books-api-nat-${count.index}" }
+  tags          = { Name = "${local.name_prefix}-nat-${count.index}" }
 
   depends_on = [aws_internet_gateway.this]
 }
@@ -66,7 +66,7 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.this.id
   }
 
-  tags = { Name = "books-api-public" }
+  tags = { Name = "${local.name_prefix}-public" }
 }
 
 resource "aws_route_table_association" "public" {
@@ -84,7 +84,7 @@ resource "aws_route_table" "private" {
     nat_gateway_id = var.single_nat_gateway ? aws_nat_gateway.this[0].id : aws_nat_gateway.this[count.index].id
   }
 
-  tags = { Name = "books-api-private-${local.azs[count.index]}" }
+  tags = { Name = "${local.name_prefix}-private-${local.azs[count.index]}" }
 }
 
 resource "aws_route_table_association" "private" {

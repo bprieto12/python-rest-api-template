@@ -74,26 +74,42 @@ terraform/        this service's AWS infrastructure (see terraform/README.md)
 tests/            pytest suite (httpx ASGI client)
 ```
 
+## Environments
+
+There are two, **staging** and **production** — the same Terraform config
+applied twice, once per Terraform workspace, isolated by resource naming
+(production is unsuffixed; staging gets `-staging`). Push to `main` deploys
+staging automatically; pushing a `v*` tag promotes that same tested image to
+production. See [`docs/RUNBOOK.md`](docs/RUNBOOK.md)'s "Environments"
+section for the full release flow and naming rule.
+
 ## First-time setup / tearing it down
 
 Everything under "Deployment notes" below — the state bucket, ECR, the ECS
 IAM roles, the GitHub OIDC provider and deploy roles, `terraform apply`, and
-every GitHub Environment secret/variable CD and CI need — is one command:
+every GitHub Environment secret/variable CD and CI need — is one command,
+**run once per environment**:
 
 ```bash
-HOSTED_ZONE_NAME=example.com DOMAIN_NAME=books-api.example.com ./scripts/bootstrap.sh
+HOSTED_ZONE_NAME=example.com DOMAIN_NAME=books-api.example.com \
+  ENVIRONMENT=production ./scripts/bootstrap.sh
+HOSTED_ZONE_NAME=example.com DOMAIN_NAME=staging.books-api.example.com \
+  ENVIRONMENT=staging ./scripts/bootstrap.sh
 ```
 
 It doesn't create your domain or Route 53 hosted zone — bring your own,
-already delegated. Safe to re-run (every step checks before creating or
-overwriting anything). See the script's own header comment for every
-optional env var and the full list of prerequisites (`aws`, `terraform`,
-`gh`, real static AWS credentials — not an `aws login` session, which
-Terraform's SDK can't read).
+already delegated (both environments can share one zone). Safe to re-run
+(every step checks before creating or overwriting anything). See the
+script's own header comment for every optional env var and the full list of
+prerequisites (`aws`, `terraform`, `gh`, real static AWS credentials — not
+an `aws login` session, which Terraform's SDK can't read).
 
-`scripts/teardown.sh` reverses it — same command shape, asks for
-confirmation first, and never touches the hosted zone/domain or the GitHub
-OIDC provider (see its header for why).
+`scripts/teardown.sh ENVIRONMENT=<env>` reverses it for one environment at a
+time — same command shape, asks for confirmation first, and never touches
+the hosted zone/domain or the GitHub OIDC provider (see its header for
+why); the ECR repo and state bucket are shared, so they're only removed
+when tearing down production, and only once no other environment's state
+is left.
 
 ## Why DynamoDB, and what that trades away
 
@@ -119,7 +135,8 @@ without a relational unique constraint.
   [`terraform/README.md`](terraform/README.md)'s "Auth" section for the flow,
   or [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for the short version (how to
   actually make a request).
-- **Rollout** registers a new [`ecs/task-definition.json`](ecs/task-definition.json)
+- **Rollout** registers a new `ecs/task-definition.<environment>.json`
+  (e.g. [`ecs/task-definition.production.json`](ecs/task-definition.production.json))
   revision, then `aws ecs update-service --force-new-deployment` and waits for
   the service to stabilize — there's no migration step (DynamoDB is
   schemaless). See [`ecs/README.md`](ecs/README.md) and

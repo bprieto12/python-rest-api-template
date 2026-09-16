@@ -8,8 +8,8 @@ resource "aws_security_group" "alb" {
   # the new group exist (under a generated name) before the old one is
   # torn down, so a future description/rule change that forces replacement
   # can't hit this same race.
-  name_prefix = "books-api-alb-"
-  description = "books-api ALB - internal, reachable only via API Gateway VPC Link."
+  name_prefix = "${local.name_prefix}-alb-"
+  description = "${local.name_prefix} ALB - internal, reachable only via API Gateway VPC Link."
   vpc_id      = aws_vpc.this.id
 
   egress {
@@ -19,7 +19,7 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "books-api-alb" }
+  tags = { Name = "${local.name_prefix}-alb" }
 
   lifecycle {
     create_before_destroy = true
@@ -27,8 +27,8 @@ resource "aws_security_group" "alb" {
 }
 
 resource "aws_security_group" "ecs_tasks" {
-  name        = "books-api-ecs-tasks"
-  description = "books-api task SG - ingress from the ALB only."
+  name        = "${local.name_prefix}-ecs-tasks"
+  description = "${local.name_prefix} task SG - ingress from the ALB only."
   vpc_id      = aws_vpc.this.id
 
   ingress {
@@ -47,7 +47,7 @@ resource "aws_security_group" "ecs_tasks" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "books-api-ecs-tasks" }
+  tags = { Name = "${local.name_prefix}-ecs-tasks" }
 }
 
 # API Gateway's VPC Link ENIs — the only thing allowed to reach the (now
@@ -61,11 +61,11 @@ resource "aws_security_group" "ecs_tasks" {
 # attach to each afterward.
 
 resource "aws_security_group" "vpc_link" {
-  name        = "books-api-vpc-link"
+  name        = "${local.name_prefix}-vpc-link"
   description = "API Gateway VPC Link ENIs - reach the internal ALB, nothing else."
   vpc_id      = aws_vpc.this.id
 
-  tags = { Name = "books-api-vpc-link" }
+  tags = { Name = "${local.name_prefix}-vpc-link" }
 }
 
 resource "aws_vpc_security_group_egress_rule" "vpc_link_to_alb" {
