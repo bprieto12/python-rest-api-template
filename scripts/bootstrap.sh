@@ -273,6 +273,22 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # "books-api.tfstate" in the allowed s3:prefix list, the correctly-granted
 # s3:GetObject above still 403s in practice, not 404s — indistinguishable
 # from a real permissions gap from the caller's side.
+#
+# ListBucket's prefix condition is "env:/*", not "env:/$ENVIRONMENT/*" —
+# this ALSO bit us for real, worse than the above: `terraform workspace
+# select -or-create` has to LIST the generic "env:/" prefix first, to
+# enumerate every EXISTING workspace and decide whether to select or
+# create one. Scoped to just this environment's own subtree, that listing
+# 403s, and Terraform — unable to tell "staging" already exists — takes
+# the "create" branch, silently against a workspace that's already live,
+# every single run. Object-level access (GetObject/PutObject/DeleteObject
+# on StateBackendObjects above) stays scoped to this environment's own
+# key only — this only widens what key NAMES the role can see exist, not
+# what content it can read or write. Names alone aren't sensitive here
+# ("staging"/"production" are already public knowledge from this repo's
+# own docs); the alternative (every environment's Terraform role silently
+# reapplying its entire config from scratch, colliding with its own real
+# infrastructure, on every single run) is far worse.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -343,13 +359,13 @@ TF_POLICY=$(cat <<JSON
       "Resource": "arn:aws:s3:::$TF_STATE_BUCKET/books-api.tfstate"
     },
     {
-      "Sid": "StateBackendListThisEnvironmentOnly",
+      "Sid": "StateBackendList",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::$TF_STATE_BUCKET",
       "Condition": {
         "StringLike": {
-          "s3:prefix": ["env:/$ENVIRONMENT/*", "books-api.tfstate"]
+          "s3:prefix": ["env:/*", "books-api.tfstate"]
         }
       }
     },
