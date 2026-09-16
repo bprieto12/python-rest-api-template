@@ -29,13 +29,20 @@ output "cognito_domain" {
   value       = aws_cognito_user_pool_domain.this.domain
 }
 
-output "cognito_client_id" {
-  value = aws_cognito_user_pool_client.this.id
+output "cognito_user_pool_id" {
+  description = "Feeds the COGNITO_USER_POOL_ID GitHub Environment variable — see scripts/bootstrap.sh. cd.yml's build-and-push-kong job uses it to list consumers and fetch the JWKS directly, since the CD role has no Terraform state access to read cognito_client_ids from."
+  value       = aws_cognito_user_pool.this.id
 }
 
-output "cognito_client_secret" {
-  sensitive = true # retrieve with: terraform output -raw cognito_client_secret
-  value     = aws_cognito_user_pool_client.this.client_secret
+output "cognito_client_ids" {
+  description = "Keyed by consumer name (var.api_consumers) — e.g. `terraform output -json cognito_client_ids | jq -r .default`."
+  value       = { for name, c in aws_cognito_user_pool_client.consumers : name => c.id }
+}
+
+output "cognito_client_secrets" {
+  description = "Keyed by consumer name, same as cognito_client_ids."
+  sensitive   = true # retrieve with: terraform output -json cognito_client_secrets
+  value       = { for name, c in aws_cognito_user_pool_client.consumers : name => c.client_secret }
 }
 
 output "alerts_topic_arn" {

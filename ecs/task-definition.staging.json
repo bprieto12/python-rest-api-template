@@ -15,7 +15,7 @@
       "name": "api",
       "image": "351882761505.dkr.ecr.us-east-1.amazonaws.com/books-api:latest",
       "essential": true,
-      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "portMappings": [{ "name": "api", "containerPort": 8000, "protocol": "tcp" }],
       "dependsOn": [{ "containerName": "aws-otel-collector", "condition": "START" }],
       "environment": [
         { "name": "ENVIRONMENT", "value": "staging" },

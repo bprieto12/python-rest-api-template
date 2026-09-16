@@ -1,0 +1,40 @@
+{
+  "family": "books-api-staging-kong",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::351882761505:role/books-api-staging-execution",
+  "taskRoleArn": "arn:aws:iam::351882761505:role/books-api-staging-execution",
+  "containerDefinitions": [
+    {
+      "name": "kong",
+      "image": "351882761505.dkr.ecr.us-east-1.amazonaws.com/kong:latest",
+      "essential": true,
+      "portMappings": [
+        { "name": "proxy", "containerPort": 8000, "protocol": "tcp" },
+        { "name": "status", "containerPort": 8100, "protocol": "tcp" }
+      ],
+      "healthCheck": {
+        "command": ["CMD", "kong", "health"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/books-api-staging",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "kong",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

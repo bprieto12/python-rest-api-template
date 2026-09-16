@@ -39,13 +39,18 @@ echo
 # --- ECR -----------------------------------------------------------------
 # Deliberately not environment-scoped — one repo, one image per commit SHA,
 # the same artifact promoted from staging to production rather than
-# rebuilt for each. See docs/RUNBOOK.md's "Environments" section.
-if aws ecr describe-repositories --repository-names books-api --region "$AWS_REGION" >/dev/null 2>&1; then
-  echo "ECR repo books-api already exists"
-else
-  aws ecr create-repository --repository-name books-api --region "$AWS_REGION" >/dev/null
-  echo "Created ECR repo books-api"
-fi
+# rebuilt for each. See docs/RUNBOOK.md's "Environments" section. Same
+# reasoning applies to the "kong" repo (terraform/kong.tf, cd.yml's
+# build-and-push-kong job) — a second, independently-versioned image, not
+# environment-scoped either.
+for repo in books-api kong; do
+  if aws ecr describe-repositories --repository-names "$repo" --region "$AWS_REGION" >/dev/null 2>&1; then
+    echo "ECR repo $repo already exists"
+  else
+    aws ecr create-repository --repository-name "$repo" --region "$AWS_REGION" >/dev/null
+    echo "Created ECR repo $repo"
+  fi
+done
 
 # --- IAM: execution role (pull image, write logs) --------------------------
 TRUST_POLICY='{
@@ -128,18 +133,22 @@ aws iam put-role-policy --role-name "$TASK_ROLE" \
 echo "  $TASK_ROLE: AWSXRayDaemonWriteAccess + CloudWatchAgentServerPolicy + DynamoDB access on both tables"
 echo
 
-# --- Patch the placeholder account id in this environment's task def ------
-TASK_DEF="$SCRIPT_DIR/task-definition.${ENVIRONMENT}.json"
-if [ ! -f "$TASK_DEF" ]; then
-  echo "No $(basename "$TASK_DEF") — is ENVIRONMENT ($ENVIRONMENT) spelled right?" >&2
-  exit 1
-fi
-if grep -q '000000000000' "$TASK_DEF"; then
-  sed -i.bak "s/000000000000/$ACCOUNT_ID/g" "$TASK_DEF" && rm -f "$TASK_DEF.bak"
-  echo "Patched $(basename "$TASK_DEF") with account $ACCOUNT_ID"
-else
-  echo "$(basename "$TASK_DEF") has no placeholder account id left — left untouched"
-fi
+# --- Patch the placeholder account id in this environment's task defs -----
+# Kong reuses books-api's execution role (it needs no DynamoDB/task-role
+# permissions of its own — see ecs/task-definition.kong.<environment>.json),
+# so it gets the same placeholder-patch treatment, not a separate role.
+for TASK_DEF in "$SCRIPT_DIR/task-definition.${ENVIRONMENT}.json" "$SCRIPT_DIR/task-definition.kong.${ENVIRONMENT}.json"; do
+  if [ ! -f "$TASK_DEF" ]; then
+    echo "No $(basename "$TASK_DEF") — is ENVIRONMENT ($ENVIRONMENT) spelled right?" >&2
+    exit 1
+  fi
+  if grep -q '000000000000' "$TASK_DEF"; then
+    sed -i.bak "s/000000000000/$ACCOUNT_ID/g" "$TASK_DEF" && rm -f "$TASK_DEF.bak"
+    echo "Patched $(basename "$TASK_DEF") with account $ACCOUNT_ID"
+  else
+    echo "$(basename "$TASK_DEF") has no placeholder account id left — left untouched"
+  fi
+done
 
 echo
 echo "Done. Next: terraform apply (in terraform/, workspace $ENVIRONMENT) to create the DynamoDB tables and the rest of this environment's infra."

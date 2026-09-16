@@ -136,3 +136,122 @@ jobs:
             --task-definition "${{ steps.register.outputs.arn }}" \
             --force-new-deployment
           aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX"
+
+  # Kong (terraform/kong.tf) gets its own image, built fresh on every deploy
+  # rather than promoted-unchanged like books-api's — its declarative config
+  # (kong.yml) bakes in the *current* Cognito consumer list, so "the same
+  # artifact staging already ran" doesn't apply the same way here: a new
+  # consumer added between the staging and production releases should still
+  # show up in production's build. See ecs/kong/render_config.py for what
+  # actually generates kong.yml, and terraform/README.md for why Kong exists
+  # in the request path at all (API Gateway's JWT authorizer alone can't do
+  # per-consumer rate limiting on apigatewayv2).
+  build-and-push-kong:
+    needs: set-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.environment }}
+    env:
+      ECR_REPOSITORY: kong
+      NAME_PREFIX: ${{ needs.set-environment.outputs.name_prefix }}
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Compute image ref
+        id: meta
+        run: echo "image=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Cognito's JWKS
+        # Public endpoint, no auth needed — just the user pool id.
+        run: |
+          curl -fsS "https://cognito-idp.${AWS_REGION}.amazonaws.com/${{ vars.COGNITO_USER_POOL_ID }}/.well-known/jwks.json" \
+            -o ecs/kong/jwks.json
+
+      - name: List consumers (name -> client_id)
+        # CD has no Terraform state access (that's TF_DEPLOY_ROLE_ARN, a
+        # different role) — reads the live consumer list from Cognito
+        # directly instead of `terraform output cognito_client_ids`. Client
+        # names are "$NAME_PREFIX-<consumer>" (terraform/cognito.tf); strip
+        # the prefix to get back the bare name render_config.py expects.
+        run: |
+          aws cognito-idp list-user-pool-clients \
+            --user-pool-id "${{ vars.COGNITO_USER_POOL_ID }}" \
+            --query 'UserPoolClients[].{Name:ClientName,Id:ClientId}' --output json \
+          | jq --arg prefix "${NAME_PREFIX}-" \
+              'map({(.Name | sub("^" + $prefix; "")): .Id}) | add' \
+            > ecs/kong/consumers.json
+          cat ecs/kong/consumers.json
+
+      - name: Render kong.yml
+        run: |
+          pip install --quiet cryptography
+          python3 ecs/kong/render_config.py \
+            --jwks ecs/kong/jwks.json \
+            --consumers ecs/kong/consumers.json \
+            --rate-limits "ecs/kong/rate-limits.${{ needs.set-environment.outputs.environment }}.json" \
+            --upstream-host books-api \
+            --upstream-port 8000 \
+            --out ecs/kong/kong.yml
+          rm -f ecs/kong/jwks.json ecs/kong/consumers.json # client ids aren't secret, but no reason to leave them in the build context after use
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push (skip if this commit's image already exists)
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.image }}" >/dev/null 2>&1; then
+            echo "Image already exists for $GITHUB_SHA — reusing it, not rebuilding."
+          else
+            docker buildx build --push \
+              --cache-from type=gha,scope=kong --cache-to type=gha,mode=max,scope=kong \
+              -t "${{ steps.meta.outputs.image }}" \
+              -t "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" \
+              ecs/kong
+          fi
+
+  deploy-kong:
+    needs: [set-environment, build-and-push-kong]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.environment }}
+    env:
+      NAME_PREFIX: ${{ needs.set-environment.outputs.name_prefix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Render task definition with the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ecs/task-definition.kong.${{ needs.set-environment.outputs.environment }}.json
+          container-name: kong
+          image: ${{ needs.build-and-push-kong.outputs.image }}
+
+      - name: Register the task definition revision
+        id: register
+        run: |
+          arn=$(aws ecs register-task-definition \
+            --cli-input-json "file://${{ steps.render.outputs.task-definition }}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Update the service and wait for it to stabilize
+        run: |
+          aws ecs update-service \
+            --cluster "$NAME_PREFIX" \
+            --service "$NAME_PREFIX-kong" \
+            --task-definition "${{ steps.register.outputs.arn }}" \
+            --force-new-deployment
+          aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX-kong"

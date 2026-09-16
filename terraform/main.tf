@@ -43,27 +43,6 @@ resource "aws_ecs_task_definition" "this" {
   }
 }
 
-resource "aws_lb_target_group" "this" {
-  name        = local.name_prefix
-  port        = local.api_container.portMappings[0].containerPort
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.this.id
-  target_type = "ip" # required for awsvpc-mode Fargate tasks
-
-  health_check {
-    path                = var.health_check_path
-    matcher             = "200"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
-
-  # ECS churns targets on every deployment; let the new task register before
-  # the old one is deregistered.
-  deregistration_delay = 30
-}
-
 resource "aws_ecs_service" "this" {
   name             = local.task_definition.family
   cluster          = aws_ecs_cluster.this.id
@@ -78,13 +57,22 @@ resource "aws_ecs_service" "this" {
     assign_public_ip = false
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.this.arn
-    container_name   = local.api_container.name
-    container_port   = local.api_container.portMappings[0].containerPort
-  }
+  # Not behind the ALB anymore — Kong is (kong.tf/alb.tf). books-api is only
+  # reachable from Kong now, over Service Connect's internal DNS ("books-api"
+  # — the client_alias below), not a target group.
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.this.arn
 
-  health_check_grace_period_seconds = 30
+    service {
+      port_name = "api" # must match the named portMapping in the task def, see ecs/task-definition.<environment>.json
+
+      client_alias {
+        dns_name = "books-api"
+        port     = local.api_container.portMappings[0].containerPort
+      }
+    }
+  }
 
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100
@@ -95,8 +83,6 @@ resource "aws_ecs_service" "this" {
   }
 
   enable_execute_command = true
-
-  depends_on = [aws_lb_listener.http]
 
   lifecycle {
     # CD owns rollouts (`register-task-definition` + `update-service

@@ -10,21 +10,30 @@
 #
 # Reads client id/secret/domain from `terraform output` in ../terraform by
 # default — needs local Terraform state, i.e. someone's already applied it.
-# Override with COGNITO_CLIENT_ID / COGNITO_CLIENT_SECRET / COGNITO_DOMAIN
-# env vars if you don't have that (e.g. CI, or a teammate's machine).
+# There's one client per consumer (terraform/cognito.tf's var.api_consumers);
+# CONSUMER picks which one (default: "default", today's one real caller).
+# Override CONSUMER, or skip Terraform entirely with COGNITO_CLIENT_ID /
+# COGNITO_CLIENT_SECRET / COGNITO_DOMAIN env vars (e.g. CI, or a teammate's
+# machine without local state).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 SCOPE="${*:-books-api/read books-api/write}"
+CONSUMER="${CONSUMER:-default}"
 
 tf_output() {
   terraform -chdir="$SCRIPT_DIR/../terraform" output -raw "$1"
 }
 
-CLIENT_ID="${COGNITO_CLIENT_ID:-$(tf_output cognito_client_id)}"
-CLIENT_SECRET="${COGNITO_CLIENT_SECRET:-$(tf_output cognito_client_secret)}"
+tf_output_json_field() {
+  terraform -chdir="$SCRIPT_DIR/../terraform" output -json "$1" \
+    | python3 -c "import sys, json; print(json.load(sys.stdin)['$CONSUMER'])"
+}
+
+CLIENT_ID="${COGNITO_CLIENT_ID:-$(tf_output_json_field cognito_client_ids)}"
+CLIENT_SECRET="${COGNITO_CLIENT_SECRET:-$(tf_output_json_field cognito_client_secrets)}"
 DOMAIN="${COGNITO_DOMAIN:-$(tf_output cognito_domain)}"
 
 echo "Requesting token (scope: $SCOPE)..." >&2

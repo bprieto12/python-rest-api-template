@@ -107,18 +107,20 @@ section for the full release flow and the one-time production state
 migration a pre-existing (pre-workspace) deployment needs.
 
 `terraform/` owns everything that isn't re-applied on every deploy: a
-dedicated VPC, the ECS cluster, an *internal* ALB (with ACM cert), the target
-group, the two DynamoDB tables, Cognito (issues OAuth2 client-credentials
-tokens), API Gateway (the actual public entry point — a JWT authorizer checks
-every request against Cognito before it reaches the VPC Link -> ALB -> ECS,
-with one Route 53 record now aliasing API Gateway rather than the ALB
-directly), and the initial ECS service + task definition revision — created
-once per environment via `terraform apply` in that environment's workspace
-(locally, or via `.github/workflows/terraform.yml`'s `workflow_dispatch`),
-not something CD re-applies; CD only registers new task definition revisions
-and calls `update-service`. See `terraform/README.md`'s "Request path"/"Auth"
-sections for the full flow. Per-account placeholders and IAM role
-requirements are in `ecs/README.md` and `terraform/README.md`.
+dedicated VPC, the ECS cluster, an *internal* ALB (with ACM cert), target
+groups, the two DynamoDB tables, Cognito (issues OAuth2 client-credentials
+tokens, one client per consumer), API Gateway (the actual public entry
+point — a JWT authorizer checks every request against Cognito), Kong
+(per-consumer rate limiting — API Gateway's own authorizer can't do that on
+`apigatewayv2`), and the initial ECS service + task definition revisions —
+created once per environment via `terraform apply` in that environment's
+workspace (locally, or via `.github/workflows/terraform.yml`'s
+`workflow_dispatch`), not something CD re-applies; CD only registers new
+task definition revisions and calls `update-service`. Request path: VPC Link
+-> ALB -> Kong -> ECS (books-api), with one Route 53 record aliasing API
+Gateway. See `terraform/README.md`'s "Request path"/"Auth" sections for the
+full flow. Per-account placeholders and IAM role requirements are in
+`ecs/README.md` and `terraform/README.md`.
 
 `docs/RUNBOOK.md` covers operating the deployed service day-to-day — viewing
 traces/metrics/logs, adding/removing an OAuth2 client ("user management"),

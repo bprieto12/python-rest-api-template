@@ -225,14 +225,16 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # $ENVIRONMENT` from versions.tf's provider default_tags). A few services
 # stay allowed on Resource "*" — not full-account AdministratorAccess, but
 # not resource-scoped either — because their create-time ARNs are opaque
-# (Cognito pool IDs, API Gateway IDs, ACM certificate IDs aren't knowable
-# before the first apply) or resource-level IAM restriction genuinely isn't
-# supported for the action (ecs:RegisterTaskDefinition,
-# elasticloadbalancing:*, ec2:* mostly fall in the latter camp — VPC/ALB
-# networking actions are too fragile to enumerate action-by-action without
-# live testing; getting one wrong mid-`apply` against real infrastructure
-# is worse than leaving that one service-wide). See terraform/README.md's
-# IAM section for the full reasoning and the residual gaps this leaves.
+# (Cognito pool IDs, API Gateway IDs, ACM certificate IDs, and now the Cloud
+# Map namespace kong.tf's aws_service_discovery_http_namespace creates for
+# ECS Service Connect all fall in this bucket — none are knowable before the
+# first apply) or resource-level IAM restriction genuinely isn't supported
+# for the action (ecs:RegisterTaskDefinition, elasticloadbalancing:*,
+# ec2:* mostly fall in the latter camp — VPC/ALB networking actions are too
+# fragile to enumerate action-by-action without live testing; getting one
+# wrong mid-`apply` against real infrastructure is worse than leaving that
+# one service-wide). See terraform/README.md's IAM section for the full
+# reasoning and the residual gaps this leaves.
 #
 # route53:ChangeResourceRecordSets is scoped to the one hosted zone, not to
 # $ENVIRONMENT — both environments' DNS records live in the SAME shared
@@ -290,6 +292,20 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # own docs); the alternative (every environment's Terraform role silently
 # reapplying its entire config from scratch, colliding with its own real
 # infrastructure, on every single run) is far worse.
+#
+# CognitoReadForKongConfig (below) is new for Kong: cd.yml's
+# build-and-push-kong job renders kong.yml (ecs/kong/render_config.py) from
+# the live consumer list + Cognito's JWKS before building that image, which
+# means reading Cognito directly — the CD role has no Terraform state access
+# (that's TF_POLICY's job, a different role), so it can't get the consumer
+# list from `terraform output` the way a human running scripts/get-token.sh
+# would. It gets the user pool id instead from the COGNITO_USER_POOL_ID
+# GitHub Environment variable (set in step 6 below, same as COGNITO_DOMAIN),
+# then lists that pool's clients directly — ListUserPoolClients alone
+# returns each client's name and id, which is all render_config.py needs.
+# Resource "*" for the same opaque-ID reason as cognito-idp:* elsewhere in
+# this file (a user pool ARN isn't scopeable to $NAME_PREFIX the way e.g.
+# the ECS service ARNs above are).
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -312,7 +328,10 @@ CD_POLICY=$(cat <<JSON
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload"
       ],
-      "Resource": "arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/books-api"
+      "Resource": [
+        "arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/books-api",
+        "arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/kong"
+      ]
     },
     {
       "Sid": "RegisterTaskDefinitions",
@@ -321,12 +340,19 @@ CD_POLICY=$(cat <<JSON
       "Resource": "*"
     },
     {
+      "Sid": "CognitoReadForKongConfig",
+      "Effect": "Allow",
+      "Action": "cognito-idp:ListUserPoolClients",
+      "Resource": "*"
+    },
+    {
       "Sid": "UpdateThisEnvironmentsService",
       "Effect": "Allow",
       "Action": ["ecs:UpdateService", "ecs:DescribeServices"],
       "Resource": [
         "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:cluster/$NAME_PREFIX",
-        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX"
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX",
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX-kong"
       ]
     },
     {
@@ -383,6 +409,12 @@ TF_POLICY=$(cat <<JSON
       "Resource": "*"
     },
     {
+      "Sid": "ServiceDiscovery",
+      "Effect": "Allow",
+      "Action": "servicediscovery:*",
+      "Resource": "*"
+    },
+    {
       "Sid": "EcsClusterAndService",
       "Effect": "Allow",
       "Action": [
@@ -393,7 +425,8 @@ TF_POLICY=$(cat <<JSON
       ],
       "Resource": [
         "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:cluster/$NAME_PREFIX",
-        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX"
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX",
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX-kong"
       ]
     },
     {
@@ -647,9 +680,10 @@ echo "== 6. GitHub Environment '$ENVIRONMENT' secrets/variables =="
 
 SUBNETS="$(cd "$TF_DIR" && terraform output -json private_subnet_ids | python3 -c 'import sys,json; print(",".join(json.load(sys.stdin)))')"
 SG="$(cd "$TF_DIR" && terraform output -raw ecs_security_group_id)"
-COGNITO_CLIENT_ID_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_client_id)"
-COGNITO_CLIENT_SECRET_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_client_secret)"
+COGNITO_CLIENT_ID_OUT="$(cd "$TF_DIR" && terraform output -json cognito_client_ids | python3 -c 'import sys,json; print(json.load(sys.stdin)["default"])')"
+COGNITO_CLIENT_SECRET_OUT="$(cd "$TF_DIR" && terraform output -json cognito_client_secrets | python3 -c 'import sys,json; print(json.load(sys.stdin)["default"])')"
 COGNITO_DOMAIN_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_domain)"
+COGNITO_USER_POOL_ID_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_user_pool_id)"
 
 gh secret set AWS_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$CD_ROLE_ARN"
 gh secret set TF_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$TF_ROLE_ARN"
@@ -661,13 +695,15 @@ gh variable set ECS_SUBNETS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SUB
 gh variable set ECS_SECURITY_GROUPS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SG"
 gh variable set COGNITO_CLIENT_ID --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_CLIENT_ID_OUT"
 gh variable set COGNITO_DOMAIN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_DOMAIN_OUT"
+gh variable set COGNITO_USER_POOL_ID --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_USER_POOL_ID_OUT"
 
 echo "Set: AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN, COGNITO_CLIENT_SECRET (secrets),"
 echo "DOMAIN_NAME, HOSTED_ZONE_NAME, TF_STATE_BUCKET, ECS_SUBNETS,"
-echo "ECS_SECURITY_GROUPS, COGNITO_CLIENT_ID, COGNITO_DOMAIN (variables)"
-echo "in the GitHub Environment '$ENVIRONMENT' (created automatically if it"
-echo "didn't already exist). The COGNITO_* ones feed .github/workflows/performance.yml"
-echo "(k6) — see performance/README.md."
+echo "ECS_SECURITY_GROUPS, COGNITO_CLIENT_ID, COGNITO_DOMAIN, COGNITO_USER_POOL_ID"
+echo "(variables) in the GitHub Environment '$ENVIRONMENT' (created automatically"
+echo "if it didn't already exist). COGNITO_CLIENT_ID/COGNITO_DOMAIN feed"
+echo ".github/workflows/performance.yml (k6) — see performance/README.md."
+echo "COGNITO_USER_POOL_ID feeds cd.yml's build-and-push-kong job."
 echo
 echo "Note: ECS_SUBNETS/ECS_SECURITY_GROUPS aren't actually read by any"
 echo "current workflow — they were for cd.yml's old migration-task network"

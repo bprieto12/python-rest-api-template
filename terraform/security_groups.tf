@@ -27,16 +27,19 @@ resource "aws_security_group" "alb" {
 }
 
 resource "aws_security_group" "ecs_tasks" {
+  # books-api no longer registers with the ALB directly (see kong.tf/alb.tf)
+  # — Kong does, and reaches books-api over ECS Service Connect instead. So
+  # this SG's only ingress is from Kong's tasks now, not the ALB.
   name        = "${local.name_prefix}-ecs-tasks"
-  description = "${local.name_prefix} task SG - ingress from the ALB only."
+  description = "${local.name_prefix} task SG - ingress from Kong only (Service Connect)."
   vpc_id      = aws_vpc.this.id
 
   ingress {
-    description     = "From the ALB"
+    description     = "From Kong, via Service Connect"
     from_port       = 0
     to_port         = 65535
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
+    security_groups = [aws_security_group.kong_tasks.id]
   }
 
   egress {

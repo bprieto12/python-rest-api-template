@@ -2,12 +2,13 @@
 
 Everything this service needs on AWS, in one place: a dedicated VPC, ECS
 cluster, an *internal* ALB, API Gateway (the actual public entry point) with
-Cognito-issued OAuth2 tokens enforced on every request, the two DynamoDB
-tables, and the ECS task definition/service. Deliberately not split across a
-separate "platform" repo and a "service" repo — this is one small service
-with one deploy target, and that split earns its cost once there's a second
-service sharing infrastructure, not before. See `../CLAUDE.md`'s deploy
-pipeline section for how this fits with `../ecs/` and CD.
+Cognito-issued OAuth2 tokens enforced on every request, Kong (per-consumer
+rate limiting — `kong.tf`), the two DynamoDB tables, and the ECS task
+definition/service. Deliberately not split across a separate "platform" repo
+and a "service" repo — this is one small service with one deploy target, and
+that split earns its cost once there's a second service sharing
+infrastructure, not before. See `../CLAUDE.md`'s deploy pipeline section for
+how this fits with `../ecs/` and CD.
 
 **Two environments, one config.** This same config is applied twice, once
 per **Terraform workspace** (`staging`/`production` — see
@@ -24,7 +25,8 @@ pre-existing deployment needs.
 ## Request path
 
 ```
-caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal) --> ECS
+caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal)
+  --> Kong (verify JWT, per-consumer rate limit) --(ECS Service Connect)--> ECS (books-api)
 ```
 
 TLS terminates for real at API Gateway; everything after that is plain HTTP
@@ -38,11 +40,35 @@ reach it except through the VPC Link, which only API Gateway can use.
 grant), no hosted login UI, no human users. See "Auth" below for the actual
 flow a caller goes through.
 
+**Why Kong sits in the middle (`kong.tf`):** API Gateway's JWT authorizer
+only proves a token is *valid* — it can't rate-limit per caller, and
+per-consumer throttling (Usage Plans/API Keys) isn't available on
+`apigatewayv2` (HTTP API) at all, that's a REST API (v1)-only feature.
+Rather than migrate API Gateway generations, Kong OSS sits behind the ALB
+instead: it re-verifies the same Cognito-issued JWT (never trust an
+unverified claim for rate-limiting), reads the caller's `client_id` claim,
+and enforces that consumer's limit before the request ever reaches
+`books-api`. `books-api` itself is no longer registered with the ALB at all —
+Kong is; `books-api` is only reachable from Kong, over ECS Service Connect's
+internal DNS (`books-api`), which is what makes Kong's build-time-baked
+declarative config independent of Terraform apply order (an ALB's own
+`dns_name` wouldn't exist yet when Kong's image is built — see
+`ecs/kong/render_config.py`).
+
+Kong's rate-limit counters are **in-memory** (`policy: local`), which is only
+accurate with exactly one Kong task running — `var.kong_desired_count`
+defaults to 1 for this reason. Scaling Kong out, or running more than one
+task during a rolling deploy, means limits get enforced per-task rather than
+globally, until this moves to a shared (Redis/ElastiCache-backed) policy —
+not done here, to avoid adding a new stateful dependency for a low-traffic
+template service.
+
 ## Auth
 
 See [`../docs/RUNBOOK.md`](../docs/RUNBOOK.md) for the consumer-facing
-version of this (how to make a request, how to get a client added) — this
-section is about why it's built this way.
+version of this (how to make a request, how to get a client added, how to
+change a consumer's rate limit) — this section is about why it's built this
+way.
 
 A caller does the OAuth2 client-credentials grant against the Cognito
 domain, then calls the API with the resulting bearer token.
@@ -60,6 +86,11 @@ curl -H "Authorization: Bearer $(../scripts/get-token.sh)" https://books-api.spi
 No local Terraform state (e.g. from CI, or a teammate's machine)? Set
 `COGNITO_CLIENT_ID`/`COGNITO_CLIENT_SECRET`/`COGNITO_DOMAIN` and the script
 uses those instead of calling `terraform output`.
+
+There's one Cognito client (and one Kong consumer/rate limit) per entry in
+`var.api_consumers` — `CONSUMER=<name> ../scripts/get-token.sh` picks which
+one (default: `"default"`, today's one real caller). See
+`../docs/RUNBOOK.md`'s "How to add a user" for adding another.
 
 Tokens are scoped (`books-api/read`, `books-api/write` — `cognito.tf`'s
 resource server) but API Gateway's authorizer here only checks that the
@@ -156,9 +187,11 @@ customizing the process or debugging a step it got stuck on.
    copy get applied against the wrong workspace.
 4. `terraform plan` and read it, then `terraform apply`. This creates the
    VPC, cluster, internal ALB, cert, target group, the two DynamoDB tables,
-   Cognito (user pool, domain, client), API Gateway (with its JWT authorizer
-   and VPC Link), and the initial ECS service + task definition revision —
-   all named for whichever workspace is currently selected.
+   Cognito (user pool, domain, one client per `var.api_consumers` entry),
+   API Gateway (with its JWT authorizer and VPC Link), Kong (Service Connect
+   namespace, target group, ECS service), and the initial ECS service + task
+   definition revisions (`books-api` and `books-api-kong`) — all named for
+   whichever workspace is currently selected.
 5. Set that environment's GitHub OIDC deploy role ARN and
    `ECS_SUBNETS`/`ECS_SECURITY_GROUPS` (see
    [`../ecs/README.md`](../ecs/README.md)) from this apply's

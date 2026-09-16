@@ -19,13 +19,19 @@ resource "aws_sns_topic" "alerts" {
 # --- SLO: the service is actually up ---------------------------------------
 # At least one ECS target healthy behind the ALB, always. This is the single
 # most fundamental signal — everything else is about degraded, not down.
+#
+# Tracks Kong's target group, not books-api's — Kong is what's actually
+# registered behind the ALB now (kong.tf/alb.tf); books-api sits behind Kong
+# over Service Connect, with no ALB target group of its own to alarm on. An
+# unhealthy Kong still means "the service is effectively down" from a
+# caller's perspective, which is what this alarm is actually for.
 resource "aws_cloudwatch_metric_alarm" "unhealthy_targets" {
   alarm_name        = "${local.name_prefix}-unhealthy-targets"
-  alarm_description = "No healthy ECS targets behind the ALB - the service is effectively down."
+  alarm_description = "No healthy Kong targets behind the ALB - the service is effectively down."
   namespace         = "AWS/ApplicationELB"
   metric_name       = "UnHealthyHostCount"
   dimensions = {
-    TargetGroup  = aws_lb_target_group.this.arn_suffix
+    TargetGroup  = aws_lb_target_group.kong.arn_suffix
     LoadBalancer = aws_lb.this.arn_suffix
   }
   statistic           = "Maximum"
