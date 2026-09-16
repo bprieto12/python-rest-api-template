@@ -472,7 +472,9 @@ TF_POLICY=$(cat <<JSON
       ],
       "Resource": [
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}",
-        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*"
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*",
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}",
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}:*"
       ]
     },
     {
@@ -515,6 +517,20 @@ TF_POLICY=$(cat <<JSON
       "Sid": "AlarmsDescribe",
       "Effect": "Allow",
       "Action": "cloudwatch:DescribeAlarms",
+      "Resource": "*"
+    },
+    {
+      "Sid": "DashboardThisEnvironment",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutDashboard", "cloudwatch:GetDashboard", "cloudwatch:DeleteDashboards"
+      ],
+      "Resource": "arn:aws:cloudwatch::$ACCOUNT_ID:dashboard/${NAME_PREFIX}*"
+    },
+    {
+      "Sid": "DashboardList",
+      "Effect": "Allow",
+      "Action": "cloudwatch:ListDashboards",
       "Resource": "*"
     }
   ]

@@ -62,6 +62,36 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.this.id
   name        = "$default"
   auto_deploy = true
+
+  # Closes the gap docs/RUNBOOK.md used to flag under "How to view logs":
+  # without this there is no per-request record of which route, which
+  # caller, or which status code a request got — only the aggregate 4xx/5xx
+  # *counts* in AWS/ApiGateway metrics. HTTP APIs (unlike REST APIs) don't
+  # need an account-level CloudWatch role or a log-group resource policy for
+  # this — referencing the log group's ARN here is enough.
+  #
+  # $context.authorizer.jwt.claims.client_id is the documented way to pull a
+  # claim out of the token the JWT authorizer already validated — Cognito's
+  # client-credentials tokens carry client_id, which is the one thing that
+  # tells callers apart (see cognito.tf and docs/RUNBOOK.md's "User
+  # Management" section on the one shared client today).
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway_access.arn
+    format = jsonencode({
+      requestId          = "$context.requestId"
+      requestTime        = "$context.requestTime"
+      httpMethod         = "$context.httpMethod"
+      path               = "$context.path"
+      status             = "$context.status"
+      responseLength     = "$context.responseLength"
+      integrationLatency = "$context.integrationLatency"
+      responseLatency    = "$context.responseLatency"
+      consumer           = "$context.authorizer.jwt.claims.client_id"
+      sourceIp           = "$context.identity.sourceIp"
+      errorMessage       = "$context.error.message"
+      authorizerError    = "$context.authorizer.error"
+    })
+  }
 }
 
 # This is the one place TLS actually terminates for real, on the public
