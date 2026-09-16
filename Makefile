@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install-uv install lock fmt lint typecheck test cov run seed up down logs docker-build performance-smoke performance-load
+.PHONY: help install-uv install lock fmt lint typecheck test test-unit test-integration cov run seed up down logs docker-build performance-smoke performance-load
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -25,8 +25,14 @@ lint: ## Lint (ruff) without fixing
 typecheck: ## Static types (mypy, strict)
 	uv run mypy src
 
-test: ## Run the test suite (against an in-process moto DynamoDB double, no services needed)
+test: ## Run the full test suite (unit + integration)
 	uv run pytest
+
+test-unit: ## Run only unit tests (pure logic, no I/O)
+	uv run pytest tests/unit
+
+test-integration: ## Run only integration tests (against an in-process moto DynamoDB double, no services needed)
+	uv run pytest tests/integration
 
 cov: ## Tests with coverage report
 	uv run pytest --cov --cov-report=term-missing
