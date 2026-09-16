@@ -484,6 +484,16 @@ TF_POLICY=$(cat <<JSON
       "Resource": "*"
     },
     {
+      "Sid": "ApiGatewayAccessLogDelivery",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery", "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy", "logs:DescribeResourcePolicies"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "Cognito",
       "Effect": "Allow",
       "Action": "cognito-idp:*",
