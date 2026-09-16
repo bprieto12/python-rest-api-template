@@ -88,9 +88,18 @@ jobs:
           image-ref: books-api:ci
           severity: CRITICAL
           exit-code: "1"
+          trivyignores: .trivyignore
           # CRITICAL-only so this doesn't immediately break on every
           # pre-existing HIGH finding in the base image the first time this
           # runs — tighten to CRITICAL,HIGH once that backlog's addressed.
+          #
+          # .trivyignore suppresses only known-unfixable Debian OS-package
+          # CVEs here (see that file for exactly which, and why, checked
+          # against security-tracker.debian.org, not just "Trivy said so")
+          # — NOT applied to the report-only scan above, which should keep
+          # showing them for visibility even while they can't fail the
+          # build. Each entry has an expiry date forcing periodic re-check
+          # rather than an indefinite silence.
       - name: Smoke test the image
         run: |
           docker run -d --name api -p 8000:8000 \
