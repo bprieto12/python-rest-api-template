@@ -453,7 +453,8 @@ TF_POLICY=$(cat <<JSON
       "Action": [
         "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable",
         "dynamodb:UpdateTable", "dynamodb:UpdateContinuousBackups",
-        "dynamodb:DescribeContinuousBackups", "dynamodb:TagResource", "dynamodb:ListTagsOfResource"
+        "dynamodb:DescribeContinuousBackups", "dynamodb:DescribeTimeToLive",
+        "dynamodb:TagResource", "dynamodb:ListTagsOfResource"
       ],
       "Resource": [
         "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/${NAME_PREFIX}-books",
@@ -468,7 +469,10 @@ TF_POLICY=$(cat <<JSON
         "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
         "logs:ListTagsLogGroup"
       ],
-      "Resource": "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*"
+      "Resource": [
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}",
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*"
+      ]
     },
     {
       "Sid": "LogsDescribe",
