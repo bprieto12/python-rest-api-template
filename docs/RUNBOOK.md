@@ -83,9 +83,19 @@ This only applies once, to a books-api deployment that predates staging
 existing at all — its Terraform state is sitting in the **unnamed
 `default`** workspace, not a workspace literally named `production`, since
 workspaces didn't exist in this repo's Terraform config yet when it was
-first applied. `terraform/environment.tf`'s `check` block actively refuses
-to run in the `default` workspace for exactly this reason (a safety net,
-not the primary defense — see the warning below).
+first applied. `terraform/environment.tf`'s `check` block refuses to
+*apply* in the `default` workspace itself, but that alone doesn't stop
+someone from bootstrapping a *different*, freshly-created named workspace
+while `default` still holds the real infrastructure — which is exactly
+what happened once already: a fresh `production` workspace tried to build
+a second copy of everything already live under `default`, producing a mix
+of "already exists" errors and silently-adopted real resources (anything
+AWS treats as idempotent-by-name — ECS clusters, SNS topics, CloudWatch
+alarms — just got quietly repointed rather than erroring). `scripts/bootstrap.sh`
+now hard-stops before doing anything if `default` still holds any
+resources at all, specifically to make that scenario impossible — but the
+migration below is still what actually resolves it, not just a check to
+get past.
 
 **Back up state before touching any of this:**
 

@@ -85,6 +85,14 @@ if [ "${AUTO_APPROVE:-}" != "1" ]; then
 fi
 echo
 
+if [ -f "$TF_DIR/terraform.tfvars" ]; then
+  echo "Note: $TF_DIR/terraform.tfvars exists (likely leftover from before" >&2
+  echo "multiple environments existed here) — the -var flags below take" >&2
+  echo "precedence over it regardless, so this is safe, but consider" >&2
+  echo "deleting it; see bootstrap.sh for the full explanation." >&2
+  echo >&2
+fi
+
 echo "== 1. terraform destroy (workspace: $ENVIRONMENT) =="
 
 if [ -f "$TF_DIR/backend.hcl" ]; then
@@ -95,12 +103,16 @@ if [ -f "$TF_DIR/backend.hcl" ]; then
       terraform workspace select "$ENVIRONMENT"
       : "${HOSTED_ZONE_NAME:?Set HOSTED_ZONE_NAME/DOMAIN_NAME to the same values this environment was applied with — destroy still evaluates the config (including the hosted_zone_name data source lookup), so a wrong or missing value can block it}"
       : "${DOMAIN_NAME:?See the HOSTED_ZONE_NAME message above}"
-      export TF_VAR_hosted_zone_name="$HOSTED_ZONE_NAME"
-      export TF_VAR_domain_name="$DOMAIN_NAME"
+      # -var, not TF_VAR_* env vars — -var has the HIGHEST precedence in
+      # Terraform, so it can't be silently shadowed by a leftover
+      # terraform.tfvars from an old single-environment setup. See the same
+      # note in bootstrap.sh.
       if [ "${AUTO_APPROVE:-}" = "1" ]; then
-        terraform destroy -auto-approve
+        terraform destroy -auto-approve \
+          -var "hosted_zone_name=$HOSTED_ZONE_NAME" -var "domain_name=$DOMAIN_NAME"
       else
-        terraform destroy
+        terraform destroy \
+          -var "hosted_zone_name=$HOSTED_ZONE_NAME" -var "domain_name=$DOMAIN_NAME"
       fi
     else
       echo "No Terraform workspace named '$ENVIRONMENT' — nothing to destroy" >&2

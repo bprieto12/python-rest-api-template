@@ -457,14 +457,81 @@ echo "  $CD_ROLE_NAME: scoped to the books-api ECR repo + this environment's ECS
 echo "  $TF_ROLE_NAME: scoped to this environment's resources where the AWS API supports it (see terraform/README.md's IAM section for exactly what isn't)"
 echo
 
+if [ -f "$TF_DIR/terraform.tfvars" ]; then
+  cat >&2 <<EOF
+
+WARNING: $TF_DIR/terraform.tfvars exists. A leftover copy from before this
+script supported multiple environments would still set hosted_zone_name/
+domain_name — and since a tfvars file overrides TF_VAR_* environment
+variables in Terraform's own precedence order, an old copy with, say,
+production's domain_name would silently win over the values passed on this
+run's command line, applying the WRONG domain in this ($ENVIRONMENT)
+workspace. The -var flags below take precedence over it either way (-var
+beats any tfvars file), so this run is safe regardless — but delete or
+rename that file so nothing reads it by accident later; a single shared
+file can't hold different values per environment anyway.
+
+EOF
+fi
+
 echo "== 5. terraform apply (workspace: $ENVIRONMENT) =="
 (
   cd "$TF_DIR"
+  # Contains planned values in cleartext, including sensitive ones (e.g.
+  # the Cognito client secret) — must not survive this subshell under ANY
+  # exit path, including a failed apply. The trap covers that; the
+  # explicit rm calls below are the normal-path cleanup (belt and
+  # suspenders, both fine to run since rm -f is idempotent).
+  trap 'rm -f .bootstrap.tfplan' EXIT
+
   terraform init -backend-config=backend.hcl
+
+  # Hard stop, not just a documentation note: if the unnamed "default"
+  # workspace still holds ANY resources, something here predates
+  # workspaces entirely and hasn't been migrated into a real named
+  # workspace yet. Proceeding anyway is exactly what caused a real
+  # incident — a fresh, empty named workspace tried to build a second
+  # copy of everything already live under "default", producing a mix of
+  # "already exists" errors and (worse) silently-adopted real resources
+  # for anything AWS treats as idempotent-by-name (ECS clusters, SNS
+  # topics, CloudWatch alarms). `terraform state list` reads state only —
+  # no vars needed, safe to run before anything else here.
+  terraform workspace select default
+  DEFAULT_WORKSPACE_RESOURCE_COUNT="$(terraform state list 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$DEFAULT_WORKSPACE_RESOURCE_COUNT" != "0" ]; then
+    cat >&2 <<EOF
+
+STOP: the "default" Terraform workspace still holds $DEFAULT_WORKSPACE_RESOURCE_COUNT
+resource(s) ($(terraform state list 2>/dev/null | tr '\n' ' ')).
+
+This means something was applied here before this repo used named
+workspaces, and it has NOT been migrated into a "production" workspace
+yet. Bootstrapping ANY environment now would try to build a second copy
+of whatever's in "default", alongside it in the same account — that is
+exactly what caused a real production incident earlier; see the git
+history / your own terminal scrollback for what that looked like to
+clean up.
+
+Migrate "default" into a properly-named workspace FIRST — see
+docs/RUNBOOK.md's "Environments" section, "Migrating an existing
+production to a named workspace" for the exact steps (back up state,
+terraform workspace new production, state push, and — critically —
+confirm an EMPTY terraform plan before trusting it). Re-run this script
+only after that migration's final plan comes back with no unexpected
+changes.
+EOF
+    exit 1
+  fi
+
   terraform workspace select -or-create "$ENVIRONMENT"
-  export TF_VAR_hosted_zone_name="$HOSTED_ZONE_NAME"
-  export TF_VAR_domain_name="$DOMAIN_NAME"
-  terraform plan -out=.bootstrap.tfplan
+  # -var, not TF_VAR_* env vars — -var has the HIGHEST precedence in
+  # Terraform (beats any terraform.tfvars/*.auto.tfvars file, which in turn
+  # beats TF_VAR_* env vars), so this can't be silently shadowed by a
+  # leftover tfvars file the way an env-var-only approach was.
+  terraform plan \
+    -var "hosted_zone_name=$HOSTED_ZONE_NAME" \
+    -var "domain_name=$DOMAIN_NAME" \
+    -out=.bootstrap.tfplan
   if [ "${AUTO_APPROVE:-}" = "1" ]; then
     terraform apply .bootstrap.tfplan
   else

@@ -228,4 +228,5 @@ terraform/backend.hcl
 !terraform/backend.hcl.example
 terraform/crash.log
 terraform/override.tf
+terraform/*.tfplan # scripts/bootstrap.sh's saved plan — contains planned values in cleartext, including sensitive ones (e.g. the Cognito client secret); never commit one
 terraform/override.tf.json
