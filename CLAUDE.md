@@ -19,8 +19,10 @@ targets; the essentials:
 | Install deps | `uv sync` (add `--frozen` in CI/Docker) |
 | Run API (reload) | `make run` → http://localhost:8000/docs |
 | Full local stack | `make up` (DynamoDB Local + OTel Collector + API in Docker; no Prometheus/Grafana — see `docs/RUNBOOK.md` for the real CloudWatch dashboard) |
-| Tests | `make test` — hermetic, against an in-process moto DynamoDB double |
-| One test | `uv run pytest tests/test_books.py::test_patch_updates_fields` |
+| Tests | `make test` — full suite (unit + integration), hermetic |
+| Unit tests only | `make test-unit` — pure logic, no I/O |
+| Integration tests only | `make test-integration` — against an in-process moto DynamoDB double |
+| One test | `uv run pytest tests/integration/test_books.py::test_patch_updates_fields` |
 | Lint | `make lint` (`ruff format --check` + `ruff check`) |
 | Types | `make typecheck` (`mypy --strict` on `src/`) |
 | Format + autofix | `make fmt` |
@@ -68,11 +70,16 @@ no per-resource hook the way there was for the old SQLAlchemy engine.
 instrumented" errors so the test suite can build many apps. Custom metrics go
 through `get_meter()` (see the `books.writes` counter in `routers/books.py`).
 
-**Tests run against moto's `ThreadedMotoServer`**, not `@mock_aws`. moto's
+**Tests are split into `tests/unit/` and `tests/integration/`.** Unit tests
+exercise pure logic only (schema validation, the DynamoDB item <-> `Book`
+mapping in `repository.py`, settings loading) — no app, no DynamoDB, no
+fixtures beyond what pytest itself provides. Integration tests spin up a
+real FastAPI app against moto's `ThreadedMotoServer`, not `@mock_aws` — moto's
 usual decorator only patches `botocore` internals, which this app's async
-`aiobotocore` calls don't go through — it silently mocks nothing. The
+`aiobotocore` calls don't go through, so it silently mocks nothing. The
 threaded server is a real local HTTP server instead, so it works with any
-client. See `tests/conftest.py`.
+client. See `tests/integration/conftest.py`. New tests default to
+`tests/integration/` unless the logic under test genuinely has no I/O.
 
 ## Deploy pipeline
 

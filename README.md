@@ -47,7 +47,9 @@ DYNAMODB_ENDPOINT_URL=http://localhost:8001 make run   # http://localhost:8000/d
 Run `make help` for the full list. The important ones:
 
 ```bash
-make test        # pytest — hermetic, runs against an in-process moto DynamoDB double
+make test        # pytest — full suite (unit + integration), hermetic
+make test-unit         # pure logic only, no I/O
+make test-integration  # against an in-process moto DynamoDB double
 make lint        # ruff format --check + ruff check
 make typecheck   # mypy --strict on src/
 make fmt         # ruff format + ruff check --fix
@@ -73,7 +75,8 @@ scripts/bootstrap.sh   one-command AWS + GitHub setup for a new deployment (see 
 scripts/teardown.sh    tears all of it back down again
 ecs/              Fargate task/service definitions (see ecs/README.md)
 terraform/        this service's AWS infrastructure (see terraform/README.md)
-tests/            pytest suite (httpx ASGI client)
+tests/unit/       pure-logic tests — no I/O, no app, no moto
+tests/integration/  full-app tests (httpx ASGI client + in-process moto DynamoDB)
 perf/             k6 performance tests against a deployed environment (see perf/README.md)
 ```
 
