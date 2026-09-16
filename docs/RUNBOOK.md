@@ -42,12 +42,20 @@ before a tag can go out) — tagging `v*` is a human decision. Add one later
 if staging failures start reaching production tags in practice; not built
 preemptively.
 
-`.github/workflows/terraform.yml` mirrors this: a PR touching `terraform/`
-plans **both** environments (a change can affect them differently — e.g.
-something that only breaks once staging's smaller/newer setup, or once
-production's free-tier capacity is already spoken for). `apply` is only
-ever manual, via `workflow_dispatch`, targeting the one environment you
-pick — nothing here auto-applies Terraform to either environment.
+`.github/workflows/terraform.yml` mirrors the same release flow exactly:
+a PR touching `terraform/` plans **both** environments (a change can affect
+them differently — e.g. something that only breaks once staging's
+smaller/newer setup, or once production's free-tier capacity is already
+spoken for); a push to `main` **auto-applies to staging**; pushing a `v*`
+tag **auto-applies to production** — a release promotes whatever's in
+`terraform/` at that commit, the same way it promotes the already-built
+image. This is deliberately unconditional on whether that specific commit
+touched `terraform/` (unlike the PR trigger) — re-applying unchanged config
+is a fast no-op, and a release should mean "production now matches what's
+tagged" in every respect, infra included, not just the image.
+`workflow_dispatch` is for an on-demand re-apply of either environment with
+no new commit/tag (e.g. after fixing a failed apply, or an infra-only
+change that shouldn't wait for the next release).
 
 ### Setting up staging for the first time
 

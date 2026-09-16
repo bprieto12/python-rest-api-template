@@ -184,9 +184,18 @@ runs this from GitHub instead of a local machine:
 
 - **On a PR** touching `terraform/`, it runs `plan` for **both**
   environments (a matrix job, one per workspace).
+- **On push to `main`**, it **auto-applies to staging**. **On push of a
+  `v*` tag**, it **auto-applies to production** — the same release trigger
+  `cd.yml` uses, so a release promotes `terraform/`'s state at that commit
+  to production alongside the image. Unlike the PR trigger, these aren't
+  restricted to commits that touch `terraform/` — every push to `main`/`v*`
+  runs `apply` regardless, since re-applying unchanged config is a cheap
+  no-op and a release should mean production matches what's tagged in
+  every respect.
 - **`workflow_dispatch`** (the "Run workflow" button, or `gh workflow run
   terraform.yml -f action=apply -f environment=production`) runs `plan`
-  (default) or `apply` against the one environment picked.
+  (default) or `apply` against the one environment picked — for an on-demand
+  re-apply with no new commit/tag.
 
 Each environment reads from its **own** GitHub Environment ("staging" or
 "production") — CI can't read `backend.hcl` or `terraform.tfvars`
@@ -211,35 +220,66 @@ by being opened, but it does mean plans aren't instant once that's on.
 
 ## IAM
 
-Applying this needs a broader role than CD's OIDC deploy role — at minimum
-`ec2:*` (VPC/subnets/NAT), `elasticloadbalancing:*`, `ecs:CreateCluster` /
-`CreateService` / `UpdateService` / `DescribeServices` /
-`PutClusterCapacityProviders`, `acm:RequestCertificate` /
-`DescribeCertificate`, `route53:GetHostedZone` / `ChangeResourceRecordSets`,
-`dynamodb:CreateTable` / `DeleteTable` / `DescribeTable` / `UpdateTable` /
-`UpdateContinuousBackups` (point-in-time recovery is a distinct API call
-from the table update itself)
-(note: this is a *different* set of DynamoDB permissions than the task
-role's — this is table lifecycle, not item access; see `ecs/README.md`),
-`logs:CreateLogGroup` / `DeleteLogGroup` / `DescribeLogGroups` /
-`PutRetentionPolicy` (also distinct from the execution role's
-`logs:CreateLogGroup` in `ecs/bootstrap.sh` — that one only lets the running
-task create the group if this apply hasn't already; this one is Terraform
-owning the group's retention policy), `cognito-idp:CreateUserPool` /
-`DeleteUserPool` / `CreateUserPoolDomain` / `DeleteUserPoolDomain` /
-`CreateUserPoolClient` / `DeleteUserPoolClient` / `CreateResourceServer` /
-`DeleteResourceServer`, `apigateway:*` (HTTP API, VPC Link, authorizer,
-route, stage, and custom domain — no finer-grained action set than the
-blanket one is commonly documented for API Gateway v2 resources),
-`sns:CreateTopic` / `DeleteTopic` / `GetTopicAttributes`,
-`cloudwatch:PutMetricAlarm` / `DeleteAlarms` / `DescribeAlarms`,
-and `iam:PassRole` for the execution/task roles. Run `apply` from a separate,
-more privileged role than the one CD assumes — don't widen the deploy role
-just to let CI run Terraform too. In CI this is `secrets.TF_DEPLOY_ROLE_ARN`,
-a different OIDC-trusted role from CD's `AWS_DEPLOY_ROLE_ARN` even though
-both live in the same GitHub Environment (per environment — "production"'s
-`TF_DEPLOY_ROLE_ARN` and "staging"'s are two different roles, each trusted
-only for that one environment's OIDC tokens; see `scripts/bootstrap.sh`).
+`scripts/bootstrap.sh` creates the Terraform deploy role (and CD's) with an
+**inline policy scoped per environment**, not `AdministratorAccess` — the
+policy is built in the script itself (`TF_POLICY`/`CD_POLICY`), one role pair
+per environment, so read it there for the literal JSON. The shape:
+
+- **Resource-scoped by ARN** wherever the name is deterministic (everything
+  keys off `$NAME_PREFIX`, so staging's role and production's role can only
+  reach their *own* resources): ECS cluster/service, both DynamoDB tables,
+  the CloudWatch log group, the SNS alerts topic, the CloudWatch alarms,
+  `iam:PassRole` for the execution/task roles, and (for CD) the ECR repo.
+- **Resource-scoped by an `Environment` tag/condition** where the ARN isn't
+  knowable ahead of the resource existing but the API supports tag-based
+  conditions anyway: ACM certificate request/describe/delete
+  (`aws:RequestTag`/`aws:ResourceTag`). Works because `versions.tf`'s
+  provider `default_tags` stamps every resource Terraform creates with
+  `Environment = <workspace>`.
+- **`route53:ChangeResourceRecordSets` is scoped to the one hosted zone**,
+  not per-environment — both environments' DNS records live in the *same*
+  shared zone (`route53.tf`), so this is unavoidably shared between every
+  environment's Terraform role. Nothing else about the zone (creation,
+  deletion) is grantable at all, since it's looked up via `data`, never
+  managed.
+- **Still service-wide (`service:*`) on `Resource: "*"`, deliberately, not
+  tightened further:** `ec2:*`, `elasticloadbalancing:*`, `apigateway:*`,
+  and Cognito's own action list (though narrowed off the full
+  `cognito-idp:*`, it isn't resource-scoped). Two different reasons force
+  this: (a) VPC/ALB/API Gateway resource-level IAM restriction is
+  inconsistent enough across individual EC2/ELB/API-Gateway-v2 actions that
+  enumerating them action-by-action risks silently breaking a live `apply`
+  partway through — worse than leaving the service open; (b) Cognito user
+  pool/API Gateway API IDs are opaque and assigned at creation, so there's
+  no ARN to pre-scope to before the first `apply` ever runs. **The residual
+  gap:** with these, a compromised or misconfigured Terraform role in one
+  environment could still reach *any* VPC/ALB/API Gateway/Cognito resource
+  in the account, not just its own environment's — acceptable here only
+  because nothing else in the account uses those services.
+- `ecs:RegisterTaskDefinition`/`DeregisterTaskDefinition`/
+  `DescribeTaskDefinition`/`ListTaskDefinitions` are also `Resource: "*"` —
+  these don't support resource-level permissions at all per AWS's own ECS
+  IAM reference, regardless of how narrowly you'd like to scope them.
+
+Run `apply` from a separate role than the one CD assumes — don't widen the
+deploy role just to let CI run Terraform too. In CI this is
+`secrets.TF_DEPLOY_ROLE_ARN`, a different OIDC-trusted role from CD's
+`AWS_DEPLOY_ROLE_ARN` even though both live in the same GitHub Environment
+(per environment — "production"'s `TF_DEPLOY_ROLE_ARN` and "staging"'s are
+two different roles, each trusted only for that one environment's OIDC
+tokens, and now each scoped to that environment's own resources too; see
+`scripts/bootstrap.sh`).
+
+**If you're tightening an already-live role** (one bootstrapped before this
+policy existed, still holding `AdministratorAccess`): re-run
+`scripts/bootstrap.sh` for that environment — it detaches
+`AdministratorAccess` and attaches the scoped policy in its place. Do this
+against **staging first** and watch a full `terraform apply` + `cd.yml`
+deploy succeed before doing the same to production. An `AccessDenied` error
+afterward just means one action got missed for something this template
+doesn't do by default (a customization you've added) — add it to the
+relevant `Sid` in `scripts/bootstrap.sh` and re-run; it isn't a sign
+anything here is fundamentally broken.
 
 ## Cost notes
 

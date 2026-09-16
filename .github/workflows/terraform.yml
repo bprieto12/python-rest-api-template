@@ -1,13 +1,18 @@
 name: Terraform
 
-# Two ways in:
+# Three ways in, mirroring cd.yml's release model exactly:
 # - A PR touching terraform/ gets a `plan` for BOTH environments (matrix
 #   below) — a change here can break staging or production differently
 #   (e.g. a resource that only exists once free-tier capacity runs out),
 #   so both get checked before merge.
+# - A push to main auto-applies to STAGING. A push of a v* tag
+#   auto-applies to PRODUCTION — a "release" promotes whatever's in
+#   terraform/ at that commit, same as it promotes the already-built image
+#   in cd.yml. Deliberately NOT restricted to commits that touch
+#   terraform/ (unlike the PR trigger above) — a real promotion, and
+#   re-applying unchanged config is a fast no-op, not a risk.
 # - workflow_dispatch runs `plan` (default) or `apply` against the one
-#   environment you pick. `apply` is ONLY ever manual, on purpose — nothing
-#   in this repo auto-applies Terraform.
+#   environment you pick, for an on-demand re-apply with no new commit/tag.
 #
 # Backend bucket/region are shared infra (one bucket, one key, isolated by
 # Terraform workspace — see terraform/environment.tf) and come from
@@ -20,6 +25,9 @@ on:
     paths:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       action:
@@ -105,9 +113,15 @@ jobs:
 
   apply:
     needs: fmt-check
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    # A push event targets staging (a branch push, i.e. main) or
+    # production (a tag push, i.e. a v* release) automatically, based on
+    # ref_type — same rule cd.yml's set-environment job uses. workflow_dispatch
+    # picks its own environment explicitly via inputs.environment instead.
+    if: |
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_type == 'tag' && 'production' || 'staging') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,7 +145,7 @@ jobs:
 
       - name: Select workspace
         working-directory: terraform
-        run: terraform workspace select -or-create "${{ inputs.environment }}"
+        run: terraform workspace select -or-create "${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_type == 'tag' && 'production' || 'staging') }}"
 
       - name: Terraform validate
         working-directory: terraform

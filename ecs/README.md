@@ -82,6 +82,11 @@ sets up and why:
   `CloudWatchAgentServerPolicy` for the collector sidecar.
 - The **GitHub OIDC deploy role** (`books-api-cd`/`books-api-staging-cd`,
   created by `scripts/bootstrap.sh`, not this one — a role trusted for this
-  repo via GitHub's OIDC provider, one per environment) needs
-  `ecs:RegisterTaskDefinition`, `ecs:UpdateService`, `ecs:DescribeServices`,
-  `iam:PassRole` for the two roles above, plus ECR push.
+  repo via GitHub's OIDC provider, one per environment) has an inline policy
+  scoped to `ecs:RegisterTaskDefinition`, `ecs:UpdateService`/
+  `DescribeServices` on that environment's cluster/service only,
+  `iam:PassRole` for the two roles above only, and push/pull on the one
+  `books-api` ECR repo — not `AdministratorAccess`. See
+  `scripts/bootstrap.sh`'s `CD_POLICY` for the literal policy and
+  `terraform/README.md`'s IAM section for the equivalent reasoning on the
+  Terraform role.

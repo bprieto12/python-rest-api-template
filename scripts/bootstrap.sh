@@ -79,12 +79,14 @@ fi
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 echo "Account: $ACCOUNT_ID   Region: $AWS_REGION   Environment: $ENVIRONMENT"
 
-if ! aws route53 list-hosted-zones-by-name --dns-name "$HOSTED_ZONE_NAME" \
-     --query "HostedZones[?Name=='${HOSTED_ZONE_NAME}.']" --output text | grep -q .; then
+HOSTED_ZONE_ID="$(aws route53 list-hosted-zones-by-name --dns-name "$HOSTED_ZONE_NAME" \
+  --query "HostedZones[?Name=='${HOSTED_ZONE_NAME}.'].Id | [0]" --output text)"
+if [ -z "$HOSTED_ZONE_ID" ] || [ "$HOSTED_ZONE_ID" = "None" ]; then
   echo "No Route 53 hosted zone found for $HOSTED_ZONE_NAME." >&2
   echo "This script doesn't create one — create/delegate it first, then re-run." >&2
   exit 1
 fi
+HOSTED_ZONE_ID="${HOSTED_ZONE_ID#/hostedzone/}" # comes back as "/hostedzone/ZXXXXXXXXXXXXX"; used below to scope the Terraform role's route53:ChangeResourceRecordSets
 
 REPO_NWO="${GITHUB_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)}"
 : "${REPO_NWO:?Could not determine the GitHub repo. Run this from inside a clone with gh authenticated, or set GITHUB_REPO=owner/repo}"
@@ -199,11 +201,11 @@ create_or_update_role() {
     aws iam create-role --role-name "$role_name" --assume-role-policy-document "$TRUST_POLICY" >/dev/null
     echo "Created IAM role $role_name"
   fi
-  # AdministratorAccess for simplicity, same tradeoff already made for the
-  # ECS roles and local terraform-apply credentials — see ecs/README.md and
-  # terraform/README.md's IAM sections for the actual minimal permission
-  # sets if you want to tighten these later.
-  aws iam attach-role-policy --role-name "$role_name" --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+  # Detach AdministratorAccess if an earlier version of this script attached
+  # it — this run replaces it with the scoped inline policy below. Harmless
+  # no-op if it was never attached (that's the common case on a fresh role).
+  aws iam detach-role-policy --role-name "$role_name" \
+    --policy-arn arn:aws:iam::aws:policy/AdministratorAccess 2>/dev/null || true
 }
 
 CD_ROLE_NAME="${NAME_PREFIX}-cd"
@@ -213,6 +215,246 @@ create_or_update_role "$TF_ROLE_NAME"
 
 CD_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$CD_ROLE_NAME"
 TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
+
+# Both policies below are scoped to THIS environment's own resources
+# wherever the target AWS API supports it (by ARN where the name is
+# deterministic — cluster/service/table/log-group/topic/alarm all embed
+# $NAME_PREFIX — or by an Environment tag/RequestTag condition where it
+# isn't, since every resource Terraform creates gets `Environment =
+# $ENVIRONMENT` from versions.tf's provider default_tags). A few services
+# stay allowed on Resource "*" — not full-account AdministratorAccess, but
+# not resource-scoped either — because their create-time ARNs are opaque
+# (Cognito pool IDs, API Gateway IDs, ACM certificate IDs aren't knowable
+# before the first apply) or resource-level IAM restriction genuinely isn't
+# supported for the action (ecs:RegisterTaskDefinition,
+# elasticloadbalancing:*, ec2:* mostly fall in the latter camp — VPC/ALB
+# networking actions are too fragile to enumerate action-by-action without
+# live testing; getting one wrong mid-`apply` against real infrastructure
+# is worse than leaving that one service-wide). See terraform/README.md's
+# IAM section for the full reasoning and the residual gaps this leaves.
+#
+# route53:ChangeResourceRecordSets is scoped to the one hosted zone, not to
+# $ENVIRONMENT — both environments' DNS records live in the SAME shared
+# zone (see route53.tf), so this one action is unavoidably shared between
+# every environment's Terraform role.
+CD_POLICY=$(cat <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcrPushPull",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": "arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/books-api"
+    },
+    {
+      "Sid": "RegisterTaskDefinitions",
+      "Effect": "Allow",
+      "Action": ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UpdateThisEnvironmentsService",
+      "Effect": "Allow",
+      "Action": ["ecs:UpdateService", "ecs:DescribeServices"],
+      "Resource": [
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:cluster/$NAME_PREFIX",
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX"
+      ]
+    },
+    {
+      "Sid": "PassThisEnvironmentsRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::$ACCOUNT_ID:role/${NAME_PREFIX}-execution",
+        "arn:aws:iam::$ACCOUNT_ID:role/${NAME_PREFIX}-task"
+      ]
+    }
+  ]
+}
+JSON
+)
+
+TF_POLICY=$(cat <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StateBackendObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::$TF_STATE_BUCKET/env:/$ENVIRONMENT/books-api.tfstate*"
+    },
+    {
+      "Sid": "StateBackendListThisEnvironmentOnly",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::$TF_STATE_BUCKET",
+      "Condition": { "StringLike": { "s3:prefix": "env:/$ENVIRONMENT/*" } }
+    },
+    {
+      "Sid": "Networking",
+      "Effect": "Allow",
+      "Action": "ec2:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "LoadBalancing",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcsClusterAndService",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:CreateCluster", "ecs:DeleteCluster", "ecs:DescribeClusters",
+        "ecs:PutClusterCapacityProviders", "ecs:TagResource", "ecs:UntagResource",
+        "ecs:CreateService", "ecs:DeleteService", "ecs:UpdateService", "ecs:DescribeServices"
+      ],
+      "Resource": [
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:cluster/$NAME_PREFIX",
+        "arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$NAME_PREFIX/$NAME_PREFIX"
+      ]
+    },
+    {
+      "Sid": "EcsTaskDefinitions",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition",
+        "ecs:DescribeTaskDefinition", "ecs:ListTaskDefinitions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassThisEnvironmentsRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::$ACCOUNT_ID:role/${NAME_PREFIX}-execution",
+        "arn:aws:iam::$ACCOUNT_ID:role/${NAME_PREFIX}-task"
+      ]
+    },
+    {
+      "Sid": "AcmRequestThisEnvironmentsCert",
+      "Effect": "Allow",
+      "Action": "acm:RequestCertificate",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestTag/Environment": "$ENVIRONMENT" } }
+    },
+    {
+      "Sid": "AcmManageThisEnvironmentsCert",
+      "Effect": "Allow",
+      "Action": [
+        "acm:DescribeCertificate", "acm:DeleteCertificate",
+        "acm:AddTagsToCertificate", "acm:ListTagsForCertificate"
+      ],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:ResourceTag/Environment": "$ENVIRONMENT" } }
+    },
+    {
+      "Sid": "Route53Read",
+      "Effect": "Allow",
+      "Action": [
+        "route53:GetHostedZone", "route53:ListHostedZones",
+        "route53:GetChange", "route53:ListResourceRecordSets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Route53WriteSharedZone",
+      "Effect": "Allow",
+      "Action": "route53:ChangeResourceRecordSets",
+      "Resource": "arn:aws:route53:::hostedzone/$HOSTED_ZONE_ID"
+    },
+    {
+      "Sid": "DynamoDbThisEnvironmentsTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable",
+        "dynamodb:UpdateTable", "dynamodb:UpdateContinuousBackups",
+        "dynamodb:DescribeContinuousBackups", "dynamodb:TagResource", "dynamodb:ListTagsOfResource"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/${NAME_PREFIX}-books",
+        "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/${NAME_PREFIX}-isbns"
+      ]
+    },
+    {
+      "Sid": "LogsThisEnvironmentsGroup",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:TagResource"],
+      "Resource": "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*"
+    },
+    {
+      "Sid": "LogsDescribe",
+      "Effect": "Allow",
+      "Action": "logs:DescribeLogGroups",
+      "Resource": "*"
+    },
+    {
+      "Sid": "Cognito",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:CreateUserPool", "cognito-idp:DeleteUserPool",
+        "cognito-idp:DescribeUserPool", "cognito-idp:UpdateUserPool",
+        "cognito-idp:CreateUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:DescribeUserPoolDomain",
+        "cognito-idp:CreateUserPoolClient", "cognito-idp:DeleteUserPoolClient",
+        "cognito-idp:DescribeUserPoolClient", "cognito-idp:UpdateUserPoolClient",
+        "cognito-idp:CreateResourceServer", "cognito-idp:DeleteResourceServer",
+        "cognito-idp:DescribeResourceServer", "cognito-idp:UpdateResourceServer",
+        "cognito-idp:TagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ApiGateway",
+      "Effect": "Allow",
+      "Action": "apigateway:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SnsThisEnvironmentsTopic",
+      "Effect": "Allow",
+      "Action": ["sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes", "sns:TagResource"],
+      "Resource": "arn:aws:sns:$AWS_REGION:$ACCOUNT_ID:${NAME_PREFIX}-alerts"
+    },
+    {
+      "Sid": "AlarmsThisEnvironment",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource"],
+      "Resource": "arn:aws:cloudwatch:$AWS_REGION:$ACCOUNT_ID:alarm:${NAME_PREFIX}-*"
+    },
+    {
+      "Sid": "AlarmsDescribe",
+      "Effect": "Allow",
+      "Action": "cloudwatch:DescribeAlarms",
+      "Resource": "*"
+    }
+  ]
+}
+JSON
+)
+
+aws iam put-role-policy --role-name "$CD_ROLE_NAME" --policy-name "$CD_ROLE_NAME" --policy-document "$CD_POLICY"
+aws iam put-role-policy --role-name "$TF_ROLE_NAME" --policy-name "$TF_ROLE_NAME" --policy-document "$TF_POLICY"
+echo "  $CD_ROLE_NAME: scoped to the books-api ECR repo + this environment's ECS cluster/service"
+echo "  $TF_ROLE_NAME: scoped to this environment's resources where the AWS API supports it (see terraform/README.md's IAM section for exactly what isn't)"
 echo
 
 echo "== 5. terraform apply (workspace: $ENVIRONMENT) =="
