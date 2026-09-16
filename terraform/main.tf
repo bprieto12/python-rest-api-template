@@ -1,17 +1,20 @@
 # The ECS task definition (initial revision only) and service.
 #
-# `../ecs/task-definition.json` stays the single source of truth for the
-# container definitions and the execution/task roles, image, and container
-# port — the same file CD renders and registers on every deploy. Terraform
-# only reads it to create the *first* revision so `apply` and CD agree on
-# shape; `ignore_changes` below keeps Terraform from fighting every later
-# `register-task-definition` call CD makes on its own. Nothing here should
-# duplicate a value that's already in that file — update the JSON, not a
-# tfvars file, when e.g. the roles or port change. See ../ecs/README.md for
-# the full CD-vs-Terraform ownership split.
+# `../ecs/task-definition.<environment>.json` stays the single source of
+# truth for the container definitions and the execution/task roles, image,
+# and container port — the same file CD renders and registers on every
+# deploy for that environment. Terraform only reads it to create the *first*
+# revision so `apply` and CD agree on shape; `ignore_changes` below keeps
+# Terraform from fighting every later `register-task-definition` call CD
+# makes on its own. Nothing here should duplicate a value that's already in
+# that file — update the JSON, not a tfvars file, when e.g. the roles or
+# port change. See ../ecs/README.md for the full CD-vs-Terraform ownership
+# split, and for why there's one such file per environment rather than one
+# shared file (staging and production need different role ARNs and
+# DynamoDB table names baked in).
 
 locals {
-  task_definition = jsondecode(file("${path.module}/../ecs/task-definition.json"))
+  task_definition = jsondecode(file("${path.module}/../ecs/task-definition.${local.environment}.json"))
 
   api_container = one([
     for c in local.task_definition.containerDefinitions : c if c.name == "api"
@@ -41,7 +44,7 @@ resource "aws_ecs_task_definition" "this" {
 }
 
 resource "aws_lb_target_group" "this" {
-  name        = "books-api"
+  name        = local.name_prefix
   port        = local.api_container.portMappings[0].containerPort
   protocol    = "HTTP"
   vpc_id      = aws_vpc.this.id

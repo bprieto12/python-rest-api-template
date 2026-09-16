@@ -22,12 +22,6 @@ variable "single_nat_gateway" {
   default     = true
 }
 
-variable "cluster_name" {
-  description = "Name of the ECS cluster. Matches the `ECS_CLUSTER` value in ../.github/workflows/cd.yml — don't rename one without the other."
-  type        = string
-  default     = "books-api"
-}
-
 variable "hosted_zone_name" {
   description = "An already-existing Route 53 hosted zone (e.g. \"example.com\") to create this service's DNS record in. This repo doesn't create or own the zone — that's DNS for a domain you likely use for other things too, not something a single service's Terraform should be able to delete out from under you."
   type        = string

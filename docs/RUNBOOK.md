@@ -4,7 +4,117 @@ Operating this service day-to-day — as opposed to `terraform/README.md` and
 `ecs/README.md`, which cover *building* it. This assumes it's already
 deployed per those docs.
 
+## Environments
+
+There are two: **staging** and **production**. They're the same Terraform
+config (`terraform/`) applied twice, once per **Terraform workspace**
+(`terraform.workspace` — see `terraform/environment.tf`), which is what
+actually keeps their state and resources apart; there is no separate
+directory or module per environment.
+
+Naming follows one rule everywhere (`local.name_prefix` in
+`terraform/environment.tf`): **production keeps every name exactly as it
+was before staging existed** (`books-api`, `/ecs/books-api`, the
+`books-api` ECS cluster/service, and so on — everything this runbook's
+other sections reference by that literal name); staging gets `-staging`
+appended (`books-api-staging`, `/ecs/books-api-staging`, ...). The same
+rule applies to the IAM deploy roles (`books-api-cd`/`books-api-terraform`
+vs. `books-api-staging-cd`/`books-api-staging-terraform`) and to the
+GitHub Environments the CD/Terraform workflows read secrets and variables
+from ("production" vs. "staging"). The one deliberate exception is the
+Cognito resource server identifier (`books-api`, unchanged in both) — see
+the comment in `terraform/cognito.tf` for why.
+
+### Release flow
+
+- **Push to `main`** → deploys to **staging** automatically.
+- **Push a `v*` tag** → deploys to **production**. `.github/workflows/cd.yml`
+  reuses the exact image already built and pushed for that commit (by the
+  `main` push that got it into staging) rather than rebuilding — production
+  always runs the literal artifact staging already ran, never a
+  fresh-but-nominally-identical build.
+- **`workflow_dispatch`** on `cd.yml` deploys either environment on demand
+  (a redeploy with no new commit — e.g. after an infra-only change),
+  bypassing both triggers above.
+
+There's no automated promotion gate (a staging smoke test that has to pass
+before a tag can go out) — tagging `v*` is a human decision. Add one later
+if staging failures start reaching production tags in practice; not built
+preemptively.
+
+`.github/workflows/terraform.yml` mirrors this: a PR touching `terraform/`
+plans **both** environments (a change can affect them differently — e.g.
+something that only breaks once staging's smaller/newer setup, or once
+production's free-tier capacity is already spoken for). `apply` is only
+ever manual, via `workflow_dispatch`, targeting the one environment you
+pick — nothing here auto-applies Terraform to either environment.
+
+### Setting up staging for the first time
+
+If production already exists but staging doesn't yet:
+
+```bash
+HOSTED_ZONE_NAME=example.com DOMAIN_NAME=staging.books-api.example.com \
+  ENVIRONMENT=staging ./scripts/bootstrap.sh
+```
+
+This creates a `staging` Terraform workspace, a full parallel set of AWS
+resources under the `books-api-staging` name, `books-api-staging-cd`/
+`books-api-staging-terraform` IAM roles trusted only for OIDC tokens minted
+for the "staging" GitHub Environment, and the "staging" GitHub Environment
+itself (created automatically the first time a secret/variable is set on
+it) with its own `AWS_DEPLOY_ROLE_ARN`/`TF_DEPLOY_ROLE_ARN`/`DOMAIN_NAME`/
+etc. `scripts/teardown.sh ENVIRONMENT=staging` reverses it; see that
+script's header for exactly what it does and doesn't remove (it never
+touches the shared ECR repo or state bucket, since production still needs
+them).
+
+### Migrating an existing production to a named workspace
+
+This only applies once, to a books-api deployment that predates staging
+existing at all — its Terraform state is sitting in the **unnamed
+`default`** workspace, not a workspace literally named `production`, since
+workspaces didn't exist in this repo's Terraform config yet when it was
+first applied. `terraform/environment.tf`'s `check` block actively refuses
+to run in the `default` workspace for exactly this reason (a safety net,
+not the primary defense — see the warning below).
+
+**Back up state before touching any of this:**
+
+```bash
+cd terraform
+terraform init -backend-config=backend.hcl   # if not already initialized
+terraform workspace select default
+terraform state pull > /tmp/books-api-default-state-backup.json
+```
+
+Then move that state into a real `production` workspace and confirm
+nothing changed:
+
+```bash
+terraform workspace new production
+terraform state push /tmp/books-api-default-state-backup.json
+terraform plan   # with TF_VAR_hosted_zone_name / TF_VAR_domain_name set as usual
+```
+
+That `plan` must come back **empty** ("No changes."). If it doesn't, stop —
+don't apply — and compare against the backup file before doing anything
+else; an empty plan is the only real confirmation this went cleanly, not
+just "the commands didn't error." Once confirmed, delete the now-empty
+`default` workspace (`terraform workspace select production && terraform
+workspace delete default`) so nothing accidentally gets applied there
+again, and update the CD/Terraform IAM roles for production (see "Setting
+up staging for the first time" above — the same `scripts/bootstrap.sh`
+invocation you'd use for a new environment also refreshes an existing
+one's trust policy/secrets safely, since every step in it checks before
+creating or overwriting).
+
 ## Observability / Production Support
+
+Everything below names resources as they exist in **production**
+(`books-api`, `/ecs/books-api`, ...) — for staging, append `-staging` to
+every resource name (`books-api-staging`, `/ecs/books-api-staging`, ...);
+see "Environments" above.
 
 ### How to view traces
 

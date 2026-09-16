@@ -1,10 +1,23 @@
 name: CD
 
+# Push to main -> staging, automatically, for fast feedback on every merge.
+# Push a v* tag -> production, a deliberate human step that promotes the
+# exact same image already tested in staging (see build-and-push: it always
+# reuses whatever's already in ECR for this commit SHA, never rebuilds).
+# workflow_dispatch can target either, manually, for a redeploy without a
+# new commit (e.g. after an infra-only fix).
 on:
   push:
     branches: [main]
     tags: ["v*"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
 
 concurrency:
   group: cd-${{ github.ref }}
@@ -16,15 +29,40 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: books-api
-  ECS_CLUSTER: books-api
-  ECS_SERVICE: books-api
+  ECR_REPOSITORY: books-api # shared across environments — one image, promoted, never rebuilt per-environment
   ECS_CONTAINER_NAME: api
 
 jobs:
-  build-and-push:
+  set-environment:
     runs-on: ubuntu-latest
-    environment: production # needed to see the AWS_DEPLOY_ROLE_ARN secret, which is scoped to this Environment
+    outputs:
+      environment: ${{ steps.compute.outputs.environment }}
+      name_prefix: ${{ steps.compute.outputs.name_prefix }}
+    steps:
+      - id: compute
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            environment="${{ inputs.environment }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            environment="production"
+          else
+            environment="staging"
+          fi
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          # "production" keeps every name exactly as it was before other
+          # environments existed here (no suffix) — see
+          # terraform/environment.tf for why; ecs/bootstrap.sh mirrors this
+          # same rule.
+          if [ "$environment" = "production" ]; then
+            echo "name_prefix=books-api" >> "$GITHUB_OUTPUT"
+          else
+            echo "name_prefix=books-api-$environment" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-push:
+    needs: set-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.environment }} # needed to see the AWS_DEPLOY_ROLE_ARN secret, which is scoped per Environment
     outputs:
       image: ${{ steps.meta.outputs.image }}
     steps:
@@ -43,20 +81,28 @@ jobs:
         run: echo "image=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.image }}
-            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build and push (skip if this commit's image already exists)
+        # A tag push re-promotes a commit already built and pushed by an
+        # earlier main-branch run — rebuilding would still work, but
+        # skipping means production always deploys the literal artifact
+        # staging already ran, not a fresh (if identical-source) rebuild.
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.image }}" >/dev/null 2>&1; then
+            echo "Image already exists for $GITHUB_SHA — reusing it, not rebuilding."
+          else
+            docker buildx build --push \
+              --cache-from type=gha --cache-to type=gha,mode=max \
+              -t "${{ steps.meta.outputs.image }}" \
+              -t "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" \
+              .
+          fi
 
   deploy:
-    needs: build-and-push
+    needs: [set-environment, build-and-push]
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ needs.set-environment.outputs.environment }}
+    env:
+      NAME_PREFIX: ${{ needs.set-environment.outputs.name_prefix }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +115,7 @@ jobs:
         id: render
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: ecs/task-definition.json
+          task-definition: ecs/task-definition.${{ needs.set-environment.outputs.environment }}.json
           container-name: ${{ env.ECS_CONTAINER_NAME }}
           image: ${{ needs.build-and-push.outputs.image }}
 
@@ -85,8 +131,8 @@ jobs:
       - name: Update the service and wait for it to stabilize
         run: |
           aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
+            --cluster "$NAME_PREFIX" \
+            --service "$NAME_PREFIX" \
             --task-definition "${{ steps.register.outputs.arn }}" \
             --force-new-deployment
-          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+          aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX"

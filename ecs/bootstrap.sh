@@ -1,27 +1,45 @@
 #!/usr/bin/env bash
-# One-time AWS prerequisites for books-api: the ECR repo and the ECS
-# execution/task IAM roles — everything ecs/task-definition.json and
-# terraform/ assume already exists, but that nothing in this repo creates.
-# Safe to re-run: every step checks before creating, and the two AWS-side
-# updates (attach-role-policy, put-role-policy) are themselves idempotent.
+# One-time AWS prerequisites for books-api: the ECR repo (shared across
+# environments — one image, built once, promoted between them) and the ECS
+# execution/task IAM roles for the given environment — everything
+# ecs/task-definition.<environment>.json and terraform/ assume already
+# exist, but that nothing in this repo creates. Safe to re-run: every step
+# checks before creating, and the two AWS-side updates (attach-role-policy,
+# put-role-policy) are themselves idempotent.
 #
-# Usage: ./ecs/bootstrap.sh
+# Run once per environment:
+#   ENVIRONMENT=production ./ecs/bootstrap.sh   # default if unset
+#   ENVIRONMENT=staging ./ecs/bootstrap.sh
+#
+# "production" keeps every name exactly as it was before other environments
+# existed here (no suffix) — see terraform/environment.tf for why. Anything
+# else gets "-<environment>" appended.
 #
 # Does NOT create the DynamoDB tables — terraform/ owns those; this script
-# only grants books-api-task the permissions to use them once they exist,
-# scoped to their ARNs by name (same names terraform/ creates, so run
-# terraform apply either before or after this — order doesn't matter here).
+# only grants the task role permissions to use them once they exist, scoped
+# to their ARNs by name (same names terraform/ creates, so run terraform
+# apply either before or after this — order doesn't matter here).
 
 set -euo pipefail
 
+ENVIRONMENT="${ENVIRONMENT:-production}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "Account: $ACCOUNT_ID   Region: $AWS_REGION"
+if [ "$ENVIRONMENT" = "production" ]; then
+  NAME_PREFIX="books-api"
+else
+  NAME_PREFIX="books-api-$ENVIRONMENT"
+fi
+
+echo "Account: $ACCOUNT_ID   Region: $AWS_REGION   Environment: $ENVIRONMENT"
 echo
 
-# --- ECR ---------------------------------------------------------------
+# --- ECR -----------------------------------------------------------------
+# Deliberately not environment-scoped — one repo, one image per commit SHA,
+# the same artifact promoted from staging to production rather than
+# rebuilt for each. See docs/RUNBOOK.md's "Environments" section.
 if aws ecr describe-repositories --repository-names books-api --region "$AWS_REGION" >/dev/null 2>&1; then
   echo "ECR repo books-api already exists"
 else
@@ -50,34 +68,37 @@ create_role_if_missing() {
   fi
 }
 
-create_role_if_missing books-api-execution
-aws iam attach-role-policy --role-name books-api-execution \
+EXECUTION_ROLE="${NAME_PREFIX}-execution"
+TASK_ROLE="${NAME_PREFIX}-task"
+
+create_role_if_missing "$EXECUTION_ROLE"
+aws iam attach-role-policy --role-name "$EXECUTION_ROLE" \
   --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
 # AmazonECSTaskExecutionRolePolicy covers logs:CreateLogStream/PutLogEvents
-# but deliberately not logs:CreateLogGroup — task-definition.json sets
-# "awslogs-create-group": "true" for both containers, which needs it granted
-# explicitly, scoped to the one log group both containers share.
+# but deliberately not logs:CreateLogGroup — task-definition.<environment>.json
+# sets "awslogs-create-group": "true" for both containers, which needs it
+# granted explicitly, scoped to the one log group both containers share.
 LOGS_POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
     "Action": "logs:CreateLogGroup",
-    "Resource": "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/books-api:*"
+    "Resource": "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*"
   }]
 }
 EOF
 )
-aws iam put-role-policy --role-name books-api-execution \
-  --policy-name books-api-log-group --policy-document "$LOGS_POLICY"
-echo "  books-api-execution: AmazonECSTaskExecutionRolePolicy + logs:CreateLogGroup on /ecs/books-api"
+aws iam put-role-policy --role-name "$EXECUTION_ROLE" \
+  --policy-name "${NAME_PREFIX}-log-group" --policy-document "$LOGS_POLICY"
+echo "  $EXECUTION_ROLE: AmazonECSTaskExecutionRolePolicy + logs:CreateLogGroup on /ecs/$NAME_PREFIX"
 
 # --- IAM: task role (what the app/sidecar containers can call at runtime) --
-create_role_if_missing books-api-task
-aws iam attach-role-policy --role-name books-api-task \
+create_role_if_missing "$TASK_ROLE"
+aws iam attach-role-policy --role-name "$TASK_ROLE" \
   --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
-aws iam attach-role-policy --role-name books-api-task \
+aws iam attach-role-policy --role-name "$TASK_ROLE" \
   --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
 DYNAMODB_POLICY=$(cat <<EOF
@@ -95,20 +116,24 @@ DYNAMODB_POLICY=$(cat <<EOF
       "dynamodb:DescribeTable"
     ],
     "Resource": [
-      "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/books-api-books",
-      "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/books-api-isbns"
+      "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/${NAME_PREFIX}-books",
+      "arn:aws:dynamodb:$AWS_REGION:$ACCOUNT_ID:table/${NAME_PREFIX}-isbns"
     ]
   }]
 }
 EOF
 )
-aws iam put-role-policy --role-name books-api-task \
-  --policy-name books-api-dynamodb --policy-document "$DYNAMODB_POLICY"
-echo "  books-api-task: AWSXRayDaemonWriteAccess + CloudWatchAgentServerPolicy + DynamoDB access on both tables"
+aws iam put-role-policy --role-name "$TASK_ROLE" \
+  --policy-name "${NAME_PREFIX}-dynamodb" --policy-document "$DYNAMODB_POLICY"
+echo "  $TASK_ROLE: AWSXRayDaemonWriteAccess + CloudWatchAgentServerPolicy + DynamoDB access on both tables"
 echo
 
-# --- Patch the placeholder account id in task-definition.json -------------
-TASK_DEF="$SCRIPT_DIR/task-definition.json"
+# --- Patch the placeholder account id in this environment's task def ------
+TASK_DEF="$SCRIPT_DIR/task-definition.${ENVIRONMENT}.json"
+if [ ! -f "$TASK_DEF" ]; then
+  echo "No $(basename "$TASK_DEF") — is ENVIRONMENT ($ENVIRONMENT) spelled right?" >&2
+  exit 1
+fi
 if grep -q '000000000000' "$TASK_DEF"; then
   sed -i.bak "s/000000000000/$ACCOUNT_ID/g" "$TASK_DEF" && rm -f "$TASK_DEF.bak"
   echo "Patched $(basename "$TASK_DEF") with account $ACCOUNT_ID"
@@ -117,4 +142,4 @@ else
 fi
 
 echo
-echo "Done. Next: terraform apply (in terraform/) to create the DynamoDB tables and the rest of the service's infra, then push to main so CD builds and deploys the real image."
+echo "Done. Next: terraform apply (in terraform/, workspace $ENVIRONMENT) to create the DynamoDB tables and the rest of this environment's infra."

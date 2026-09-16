@@ -13,14 +13,14 @@
 # (confirm the subscription email AWS sends you, or nothing arrives).
 
 resource "aws_sns_topic" "alerts" {
-  name = "books-api-alerts"
+  name = "${local.name_prefix}-alerts"
 }
 
 # --- SLO: the service is actually up ---------------------------------------
 # At least one ECS target healthy behind the ALB, always. This is the single
 # most fundamental signal — everything else is about degraded, not down.
 resource "aws_cloudwatch_metric_alarm" "unhealthy_targets" {
-  alarm_name        = "books-api-unhealthy-targets"
+  alarm_name        = "${local.name_prefix}-unhealthy-targets"
   alarm_description = "No healthy ECS targets behind the ALB - the service is effectively down."
   namespace         = "AWS/ApplicationELB"
   metric_name       = "UnHealthyHostCount"
@@ -47,7 +47,7 @@ resource "aws_cloudwatch_metric_alarm" "unhealthy_targets" {
 # per period to not be noise; this doesn't have that yet). Revisit as a
 # metric-math error-rate expression once real traffic volume justifies it.
 resource "aws_cloudwatch_metric_alarm" "gateway_5xx" {
-  alarm_name          = "books-api-gateway-5xx"
+  alarm_name          = "${local.name_prefix}-gateway-5xx"
   alarm_description   = "API Gateway is returning 5xx responses."
   namespace           = "AWS/ApiGateway"
   metric_name         = "5xx"
@@ -67,7 +67,7 @@ resource "aws_cloudwatch_metric_alarm" "gateway_5xx" {
 # (Fargate/DynamoDB cold paths included), not a tight performance target.
 # Tighten once real traffic gives a baseline worth holding to.
 resource "aws_cloudwatch_metric_alarm" "gateway_latency_p99" {
-  alarm_name          = "books-api-gateway-latency-p99"
+  alarm_name          = "${local.name_prefix}-gateway-latency-p99"
   alarm_description   = "API Gateway p99 integration latency is above 3s."
   namespace           = "AWS/ApiGateway"
   metric_name         = "IntegrationLatency"
@@ -95,7 +95,7 @@ resource "aws_cloudwatch_metric_alarm" "dynamodb_throttles" {
     isbns = aws_dynamodb_table.isbns.name
   }
 
-  alarm_name          = "books-api-dynamodb-throttles-${each.key}"
+  alarm_name          = "${local.name_prefix}-dynamodb-throttles-${each.key}"
   alarm_description   = "DynamoDB is throttling requests on the ${each.key} table - fixed provisioned capacity may need raising."
   namespace           = "AWS/DynamoDB"
   metric_name         = "ThrottledRequests"

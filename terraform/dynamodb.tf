@@ -9,7 +9,7 @@
 # two tables (the isbns one exists purely to enforce ISBN uniqueness).
 
 resource "aws_dynamodb_table" "books" {
-  name           = "books-api-books"
+  name           = "${local.name_prefix}-books"
   billing_mode   = "PROVISIONED"
   read_capacity  = 5
   write_capacity = 5
@@ -30,7 +30,7 @@ resource "aws_dynamodb_table" "books" {
 }
 
 resource "aws_dynamodb_table" "isbns" {
-  name           = "books-api-isbns"
+  name           = "${local.name_prefix}-isbns"
   billing_mode   = "PROVISIONED"
   read_capacity  = 5
   write_capacity = 5

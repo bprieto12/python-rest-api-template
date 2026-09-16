@@ -1,5 +1,5 @@
 resource "aws_ecs_cluster" "this" {
-  name = var.cluster_name
+  name = local.name_prefix
 
   setting {
     name  = "containerInsights"

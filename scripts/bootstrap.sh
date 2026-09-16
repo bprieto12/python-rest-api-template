@@ -1,22 +1,36 @@
 #!/usr/bin/env bash
-# One-command setup for a brand-new deployment of books-api: the Terraform
-# state bucket, ECR + the ECS execution/task IAM roles (via ecs/bootstrap.sh),
-# a GitHub OIDC provider + two deploy roles, `terraform apply`, and every
+# One-command setup for a books-api environment: the Terraform state bucket
+# (shared across environments — one bucket, isolated by Terraform workspace,
+# see terraform/environment.tf), ECR + the ECS execution/task IAM roles (via
+# ecs/bootstrap.sh), a GitHub OIDC provider (shared) + two PER-ENVIRONMENT
+# deploy roles, `terraform apply` in that environment's workspace, and every
 # GitHub Environment secret/variable CD and the Terraform CI workflow need
 # (AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN, DOMAIN_NAME, HOSTED_ZONE_NAME,
-# TF_STATE_BUCKET, ECS_SUBNETS, ECS_SECURITY_GROUPS — all in the "production"
-# GitHub Environment). Run this once, right after cloning this template into
-# a new repo. Safe to re-run: every step checks before creating/overwriting.
+# TF_STATE_BUCKET, ECS_SUBNETS, ECS_SECURITY_GROUPS — all in the
+# $ENVIRONMENT GitHub Environment). Safe to re-run: every step checks
+# before creating/overwriting.
+#
+# Run once per environment, right after cloning this template into a new
+# repo:
+#   HOSTED_ZONE_NAME=example.com DOMAIN_NAME=books-api.example.com \
+#     ENVIRONMENT=production ./scripts/bootstrap.sh
+#   HOSTED_ZONE_NAME=example.com DOMAIN_NAME=staging.books-api.example.com \
+#     ENVIRONMENT=staging ./scripts/bootstrap.sh
+#
+# If books-api is already live in this account from BEFORE environments
+# existed here, its state is sitting in Terraform's unnamed "default"
+# workspace, not a "production" workspace — migrate that state first (see
+# docs/RUNBOOK.md's "Environments" section) or this script's `terraform
+# apply` will try to create a second, colliding copy of everything.
 #
 # Does NOT create your domain or Route 53 hosted zone — bring your own,
 # already delegated (see terraform/variables.tf's hosted_zone_name
 # description for why this repo never owns it). scripts/teardown.sh's
 # reverse of this never touches it either.
 #
-# Usage:
-#   HOSTED_ZONE_NAME=example.com DOMAIN_NAME=books-api.example.com ./scripts/bootstrap.sh
-#
-#   Optional: AWS_REGION (default us-east-1), TF_STATE_BUCKET (default
+#   Optional: AWS_REGION (default us-east-1), ENVIRONMENT (default
+#   production — the same default terraform/environment.tf and
+#   ecs/bootstrap.sh use), TF_STATE_BUCKET (default
 #   books-api-tfstate-<account-id> — override this to reconcile with a
 #   bucket that already exists from a previous manual setup), GITHUB_REPO
 #   (owner/repo — default: read from `gh repo view`), AUTO_APPROVE=1 (skip
@@ -38,6 +52,12 @@ TF_DIR="$REPO_ROOT/terraform"
 : "${HOSTED_ZONE_NAME:?Set HOSTED_ZONE_NAME to an already-existing, already-delegated Route 53 hosted zone, e.g. example.com}"
 : "${DOMAIN_NAME:?Set DOMAIN_NAME to the FQDN this service should answer on, e.g. books-api.example.com}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
+ENVIRONMENT="${ENVIRONMENT:-production}"
+if [ "$ENVIRONMENT" = "production" ]; then
+  NAME_PREFIX="books-api"
+else
+  NAME_PREFIX="books-api-$ENVIRONMENT"
+fi
 
 echo "== Preflight =="
 
@@ -57,7 +77,7 @@ EOF
 fi
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-echo "Account: $ACCOUNT_ID   Region: $AWS_REGION"
+echo "Account: $ACCOUNT_ID   Region: $AWS_REGION   Environment: $ENVIRONMENT"
 
 if ! aws route53 list-hosted-zones-by-name --dns-name "$HOSTED_ZONE_NAME" \
      --query "HostedZones[?Name=='${HOSTED_ZONE_NAME}.']" --output text | grep -q .; then
@@ -71,7 +91,7 @@ REPO_NWO="${GITHUB_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2
 echo "GitHub repo: $REPO_NWO"
 
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-books-api-tfstate-$ACCOUNT_ID}"
-echo "State bucket: $TF_STATE_BUCKET"
+echo "State bucket: $TF_STATE_BUCKET (shared across environments — isolated by Terraform workspace)"
 echo
 
 echo "== 1. Terraform state bucket =="
@@ -97,7 +117,12 @@ else
 fi
 echo
 
-echo "== 2. Local Terraform config files =="
+echo "== 2. Local Terraform backend config =="
+# Shared across environments (one bucket, one key, isolated by workspace)
+# so this is written once regardless of which environment you're
+# bootstrapping. hosted_zone_name/domain_name are NOT written to a local
+# tfvars file — they differ per environment, so they're passed as
+# TF_VAR_* below instead, the same way the GitHub Actions workflows do it.
 
 if [ -f "$TF_DIR/backend.hcl" ]; then
   echo "terraform/backend.hcl already exists — leaving it alone"
@@ -111,24 +136,12 @@ encrypt      = true
 EOF
   echo "Wrote terraform/backend.hcl"
 fi
-
-if [ -f "$TF_DIR/terraform.tfvars" ]; then
-  echo "terraform/terraform.tfvars already exists — leaving it alone"
-else
-  cat > "$TF_DIR/terraform.tfvars" <<EOF
-aws_region = "$AWS_REGION"
-
-hosted_zone_name = "$HOSTED_ZONE_NAME"
-domain_name      = "$DOMAIN_NAME"
-EOF
-  echo "Wrote terraform/terraform.tfvars"
-fi
 echo
 
 echo "== 3. ECR repo + ECS execution/task IAM roles =="
 echo "(must exist before terraform apply — the task definition it creates"
 echo "references these roles by ARN)"
-(cd "$REPO_ROOT" && AWS_REGION="$AWS_REGION" ./ecs/bootstrap.sh)
+(cd "$REPO_ROOT" && ENVIRONMENT="$ENVIRONMENT" AWS_REGION="$AWS_REGION" ./ecs/bootstrap.sh)
 echo
 
 echo "== 4. GitHub OIDC provider + deploy roles =="
@@ -145,13 +158,20 @@ else
 fi
 
 # Every workflow job that needs these roles (cd.yml's build-and-push and
-# deploy, terraform.yml's terraform job) is `environment: production` —
-# that alone fixes the OIDC token's `sub` claim to this one form,
-# regardless of whether the run was a push, a PR, or workflow_dispatch (see
-# git history on this file — found out the hard way that "environment:"
-# overrides the usual ref/pull_request-shaped sub entirely). The owner/repo
-# each get a `*` wildcard because GitHub embeds their immutable numeric IDs
-# in the real claim (repo:owner@id/name@id:...), not just the plain names.
+# deploy, terraform.yml's plan/apply jobs) uses `environment:
+# $ENVIRONMENT` — that alone fixes the OIDC token's `sub` claim to this one
+# form, regardless of whether the run was a push, a PR, or
+# workflow_dispatch (see git history on this file — found out the hard way
+# that "environment:" overrides the usual ref/pull_request-shaped sub
+# entirely). The owner/repo each get a `*` wildcard because GitHub embeds
+# their immutable numeric IDs in the real claim (repo:owner@id/name@id:...),
+# not just the plain names.
+#
+# One role pair PER environment (books-api-cd/books-api-terraform for
+# production, books-api-staging-cd/books-api-staging-terraform for
+# staging, etc.) — each one's trust policy only matches OIDC tokens minted
+# for that one GitHub Environment, so a compromised staging deploy can't
+# assume production's role.
 OWNER="${REPO_NWO%%/*}"
 REPO="${REPO_NWO#*/}"
 TRUST_POLICY=$(cat <<JSON
@@ -163,7 +183,7 @@ TRUST_POLICY=$(cat <<JSON
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike": { "token.actions.githubusercontent.com:sub": "repo:${OWNER}@*/${REPO}@*:environment:production" }
+      "StringLike": { "token.actions.githubusercontent.com:sub": "repo:${OWNER}@*/${REPO}@*:environment:${ENVIRONMENT}" }
     }
   }]
 }
@@ -186,18 +206,23 @@ create_or_update_role() {
   aws iam attach-role-policy --role-name "$role_name" --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
 }
 
-create_or_update_role books-api-cd
-create_or_update_role books-api-terraform
+CD_ROLE_NAME="${NAME_PREFIX}-cd"
+TF_ROLE_NAME="${NAME_PREFIX}-terraform"
+create_or_update_role "$CD_ROLE_NAME"
+create_or_update_role "$TF_ROLE_NAME"
 
-CD_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/books-api-cd"
-TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/books-api-terraform"
+CD_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$CD_ROLE_NAME"
+TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 echo
 
-echo "== 5. terraform apply =="
+echo "== 5. terraform apply (workspace: $ENVIRONMENT) =="
 (
   cd "$TF_DIR"
   terraform init -backend-config=backend.hcl
-  terraform plan -var-file=terraform.tfvars -out=.bootstrap.tfplan
+  terraform workspace select -or-create "$ENVIRONMENT"
+  export TF_VAR_hosted_zone_name="$HOSTED_ZONE_NAME"
+  export TF_VAR_domain_name="$DOMAIN_NAME"
+  terraform plan -out=.bootstrap.tfplan
   if [ "${AUTO_APPROVE:-}" = "1" ]; then
     terraform apply .bootstrap.tfplan
   else
@@ -212,21 +237,23 @@ echo "== 5. terraform apply =="
 )
 echo
 
-echo "== 6. GitHub Environment 'production' secrets/variables =="
+echo "== 6. GitHub Environment '$ENVIRONMENT' secrets/variables =="
 
 SUBNETS="$(cd "$TF_DIR" && terraform output -json private_subnet_ids | python3 -c 'import sys,json; print(",".join(json.load(sys.stdin)))')"
 SG="$(cd "$TF_DIR" && terraform output -raw ecs_security_group_id)"
 
-gh secret set AWS_DEPLOY_ROLE_ARN --env production --repo "$REPO_NWO" --body "$CD_ROLE_ARN"
-gh secret set TF_DEPLOY_ROLE_ARN --env production --repo "$REPO_NWO" --body "$TF_ROLE_ARN"
-gh variable set DOMAIN_NAME --env production --repo "$REPO_NWO" --body "$DOMAIN_NAME"
-gh variable set HOSTED_ZONE_NAME --env production --repo "$REPO_NWO" --body "$HOSTED_ZONE_NAME"
-gh variable set TF_STATE_BUCKET --env production --repo "$REPO_NWO" --body "$TF_STATE_BUCKET"
-gh variable set ECS_SUBNETS --env production --repo "$REPO_NWO" --body "$SUBNETS"
-gh variable set ECS_SECURITY_GROUPS --env production --repo "$REPO_NWO" --body "$SG"
+gh secret set AWS_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$CD_ROLE_ARN"
+gh secret set TF_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$TF_ROLE_ARN"
+gh variable set DOMAIN_NAME --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$DOMAIN_NAME"
+gh variable set HOSTED_ZONE_NAME --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$HOSTED_ZONE_NAME"
+gh variable set TF_STATE_BUCKET --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$TF_STATE_BUCKET"
+gh variable set ECS_SUBNETS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SUBNETS"
+gh variable set ECS_SECURITY_GROUPS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SG"
 
 echo "Set: AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN (secrets), DOMAIN_NAME,"
 echo "HOSTED_ZONE_NAME, TF_STATE_BUCKET, ECS_SUBNETS, ECS_SECURITY_GROUPS (variables)"
+echo "in the GitHub Environment '$ENVIRONMENT' (created automatically if it"
+echo "didn't already exist)."
 echo
 echo "Note: ECS_SUBNETS/ECS_SECURITY_GROUPS aren't actually read by any"
 echo "current workflow — they were for cd.yml's old migration-task network"
@@ -236,14 +263,19 @@ echo "them again; see git history on ecs/README.md for the removal."
 echo
 
 cat <<EOF
-== Done ==
+== Done ($ENVIRONMENT) ==
 
-Consider adding required reviewers to the "production" GitHub Environment
+Consider adding required reviewers to the "$ENVIRONMENT" GitHub Environment
 in repo settings — that's what actually gates workflow_dispatch applies
 (and, incidentally, PR-triggered plans, since they share that job's
 environment key) behind approval. Not set up by this script; a deliberate
-choice to make, not a default to assume.
+choice to make, not a default to assume. Production almost certainly wants
+this; staging may not.
 
-Next: uv run python scripts/seed.py   # load the mock catalogue
-      git push                        # first real CD deploy
+$(if [ "$ENVIRONMENT" = "production" ]; then
+  echo "Next: DOMAIN_NAME=staging.$DOMAIN_NAME ENVIRONMENT=staging \\"
+  echo "        HOSTED_ZONE_NAME=$HOSTED_ZONE_NAME ./scripts/bootstrap.sh   # set up staging too"
+fi)
+Next: uv run python scripts/seed.py   # load the mock catalogue (targets whichever environment DYNAMODB_*_TABLE/AWS creds point at)
+      git push                        # first real CD deploy (push to main -> staging, tag v* -> production)
 EOF

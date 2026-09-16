@@ -1,13 +1,19 @@
 name: Terraform
 
 # Two ways in:
-# - A PR touching terraform/ gets a `plan` automatically.
-# - workflow_dispatch runs `plan` (default) or `apply` on demand.
+# - A PR touching terraform/ gets a `plan` for BOTH environments (matrix
+#   below) — a change here can break staging or production differently
+#   (e.g. a resource that only exists once free-tier capacity runs out),
+#   so both get checked before merge.
+# - workflow_dispatch runs `plan` (default) or `apply` against the one
+#   environment you pick. `apply` is ONLY ever manual, on purpose — nothing
+#   in this repo auto-applies Terraform.
 #
-# Backend config and the two required variables (hosted_zone_name,
-# domain_name) come from the "production" GitHub Environment's vars/secrets,
-# not from backend.hcl / terraform.tfvars — those are gitignored and never
-# exist in this checkout. See terraform/README.md for what's needed there.
+# Backend bucket/region are shared infra (one bucket, one key, isolated by
+# Terraform workspace — see terraform/environment.tf) and come from
+# repository-level vars. hosted_zone_name/domain_name and the Terraform
+# deploy role differ per environment and come from that environment's own
+# GitHub Environment vars/secrets — see terraform/README.md.
 
 on:
   pull_request:
@@ -22,6 +28,12 @@ on:
         type: choice
         options: [plan, apply]
         default: plan
+      environment:
+        description: Environment to target
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
 
 env:
   AWS_REGION: us-east-1
@@ -41,16 +53,20 @@ jobs:
       - working-directory: terraform
         run: terraform fmt -check -recursive
 
-  terraform:
+  plan:
     needs: fmt-check
+    if: github.event_name == 'pull_request' || inputs.action == 'plan'
+    strategy:
+      fail-fast: false
+      matrix:
+        # A PR checks both environments; workflow_dispatch checks only the
+        # one picked.
+        environment: ${{ github.event_name == 'pull_request' && fromJSON('["staging", "production"]') || fromJSON(format('["{0}"]', inputs.environment)) }}
     runs-on: ubuntu-latest
-    # Same "production" Environment CD's deploy job uses (for the vars below)
-    # — NOT the same role. TF_DEPLOY_ROLE_ARN is deliberately a separate,
-    # broader secret from CD's AWS_DEPLOY_ROLE_ARN; see terraform/README.md's
-    # IAM section for why they shouldn't be merged. If you add required
-    # reviewers to this Environment, both plan and apply pause for approval,
-    # since they share this job's `environment:` key.
-    environment: production
+    # Each environment's own GitHub Environment — separate TF_DEPLOY_ROLE_ARN
+    # per environment (least privilege: staging's role can't touch
+    # production's resources), separate HOSTED_ZONE_NAME/DOMAIN_NAME.
+    environment: ${{ matrix.environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,20 +88,56 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="use_lockfile=true"
 
+      - name: Select workspace
+        working-directory: terraform
+        run: terraform workspace select -or-create "${{ matrix.environment }}"
+
       - name: Terraform validate
         working-directory: terraform
         run: terraform validate
 
       - name: Terraform plan
-        if: github.event_name == 'pull_request' || inputs.action == 'plan'
         working-directory: terraform
         env:
           TF_VAR_hosted_zone_name: ${{ vars.HOSTED_ZONE_NAME }}
           TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
         run: terraform plan -input=false
 
+  apply:
+    needs: fmt-check
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=books-api.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Select workspace
+        working-directory: terraform
+        run: terraform workspace select -or-create "${{ inputs.environment }}"
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: terraform validate
+
       - name: Terraform apply
-        if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
         working-directory: terraform
         env:
           TF_VAR_hosted_zone_name: ${{ vars.HOSTED_ZONE_NAME }}

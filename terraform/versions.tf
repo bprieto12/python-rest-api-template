@@ -21,8 +21,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Service   = "books-api"
-      ManagedBy = "terraform"
+      Service     = "books-api"
+      Environment = local.environment
+      ManagedBy   = "terraform"
     }
   }
 }
