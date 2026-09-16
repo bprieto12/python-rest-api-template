@@ -18,7 +18,7 @@ targets; the essentials:
 | --- | --- |
 | Install deps | `uv sync` (add `--frozen` in CI/Docker) |
 | Run API (reload) | `make run` → http://localhost:8000/docs |
-| Full local stack | `make up` (DynamoDB Local + OTel Collector + Prometheus + Grafana + API in Docker) |
+| Full local stack | `make up` (DynamoDB Local + OTel Collector + API in Docker; no Prometheus/Grafana — see `docs/RUNBOOK.md` for the real CloudWatch dashboard) |
 | Tests | `make test` — hermetic, against an in-process moto DynamoDB double |
 | One test | `uv run pytest tests/test_books.py::test_patch_updates_fields` |
 | Lint | `make lint` (`ruff format --check` + `ruff check`) |

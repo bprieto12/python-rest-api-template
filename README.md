@@ -14,7 +14,7 @@ holds ~24 mock books that stand in for one.
 | Observability      | OpenTelemetry metrics + traces (OTLP, console fallback) |
 | Packaging          | uv (`pyproject.toml` + `uv.lock`)                 |
 | Container          | Multi-stage `Dockerfile` (uv build layer)         |
-| Local infra        | `docker compose` (DynamoDB Local + OTel Collector + Prometheus + Grafana + API) |
+| Local infra        | `docker compose` (DynamoDB Local + OTel Collector + API) |
 | Orchestration      | ECS Fargate (internal ALB) behind API Gateway, task/service defs in [`ecs/`](ecs/) |
 | CI/CD              | GitHub Actions ([`.github/workflows/`](.github/workflows/)) |
 | Performance tests  | k6 ([`perf/`](perf/)) — manual, against a real deployed environment |
@@ -27,13 +27,14 @@ uv sync                      # create .venv from uv.lock
 cp .env.example .env         # optional; defaults point at DynamoDB Local's usual address
 
 # Option A — everything in Docker
-make up                      # dynamodb-local + collector + prometheus + grafana + api
+make up                      # dynamodb-local + collector + api
 
 # then:
 #   http://localhost:8000/docs    API + Swagger UI
-#   http://localhost:3000         Grafana — "Books API — Overview" dashboard (no login)
-#   http://localhost:9090         Prometheus (try:  rate(http_server_duration_milliseconds_count[1m]) )
-#   http://localhost:8889/metrics collector's re-exported app metrics
+#   docker compose logs -f otel-collector   # traces/metrics, logged to console
+#
+# No local Prometheus/Grafana — production/staging telemetry lives in a
+# real CloudWatch dashboard instead (see docs/RUNBOOK.md).
 
 # Option B — DynamoDB Local in Docker, API on the host
 docker compose up -d dynamodb-local

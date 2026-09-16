@@ -1,9 +1,14 @@
-# Local dev stack: DynamoDB Local + OpenTelemetry Collector + Prometheus + Grafana + the API.
+# Local dev stack: DynamoDB Local + OpenTelemetry Collector + the API.
 #   docker compose up --build
 # The API waits for DynamoDB Local, creates tables + seeds mock data, then serves on :8000.
-#   API      http://localhost:8000/docs
-#   Grafana  http://localhost:3000   (no login; "Books API — Overview" dashboard)
-#   Prom     http://localhost:9090
+#   API        http://localhost:8000/docs
+#   Telemetry  docker compose logs -f otel-collector   (traces/metrics logged to console — see otel-collector.yaml)
+#
+# No local metrics visualization stack (Prometheus/Grafana) on purpose —
+# production/staging telemetry lives in a real CloudWatch dashboard
+# (terraform/dashboard.tf, see docs/RUNBOOK.md's "How to view metrics"),
+# and keeping a second, local-only dashboard around just for dev risked
+# people looking at the wrong one.
 
 services:
   dynamodb-local:
@@ -25,38 +30,7 @@ services:
     ports:
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
-      - "8888:8888"   # collector's own internal metrics
-      - "8889:8889"   # Prometheus scrape endpoint (app metrics re-exported)
-
-  prometheus:
-    image: prom/prometheus:v3.5.0
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --web.enable-lifecycle
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - promdata:/prometheus
-    ports:
-      - "9090:9090"   # Prometheus UI — http://localhost:9090
-    depends_on:
-      - otel-collector
-
-  grafana:
-    image: grafana/grafana:11.6.0
-    environment:
-      # Local dev only: no login, everyone is admin.
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
-      GF_AUTH_DISABLE_LOGIN_FORM: "true"
-      GF_USERS_DEFAULT_THEME: light
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafanadata:/var/lib/grafana
-    ports:
-      - "3000:3000"   # Grafana UI — http://localhost:3000 (dashboard: "Books API — Overview")
-    depends_on:
-      - prometheus
+      - "8888:8888"   # collector's own internal metrics (curl for ad-hoc inspection)
 
   api:
     build: .
@@ -80,7 +54,3 @@ services:
       - sh
       - -c
       - "python scripts/seed.py --create-tables && uvicorn books_api.main:app --host 0.0.0.0 --port 8000"
-
-volumes:
-  promdata:
-  grafanadata:
