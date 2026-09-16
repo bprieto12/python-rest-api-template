@@ -403,7 +403,8 @@ TF_POLICY=$(cat <<JSON
       "Effect": "Allow",
       "Action": [
         "route53:GetHostedZone", "route53:ListHostedZones",
-        "route53:GetChange", "route53:ListResourceRecordSets"
+        "route53:GetChange", "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource"
       ],
       "Resource": "*"
     },
