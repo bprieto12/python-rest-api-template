@@ -248,6 +248,16 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # workspace should hold nothing after migration (see
 # terraform/environment.tf and docs/RUNBOOK.md's "Environments" section),
 # so this role should never need to WRITE there.
+#
+# That bare key ALSO has to be covered by the ListBucket statement's
+# prefix condition below, not just s3:GetObject — this bit us for real:
+# the key genuinely doesn't exist post-migration (correctly — "default"
+# should be empty), and S3 deliberately returns 403 instead of 404 for a
+# GetObject/HeadObject on a nonexistent key whenever the caller can't
+# ALSO confirm non-existence via ListBucket on that same prefix. Without
+# "books-api.tfstate" in the allowed s3:prefix list, the correctly-granted
+# s3:GetObject above still 403s in practice, not 404s — indistinguishable
+# from a real permissions gap from the caller's side.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -322,7 +332,11 @@ TF_POLICY=$(cat <<JSON
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::$TF_STATE_BUCKET",
-      "Condition": { "StringLike": { "s3:prefix": "env:/$ENVIRONMENT/*" } }
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["env:/$ENVIRONMENT/*", "books-api.tfstate"]
+        }
+      }
     },
     {
       "Sid": "Networking",
