@@ -238,6 +238,21 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # zone (see route53.tf), so this one action is unavoidably shared between
 # every environment's Terraform role.
 #
+# cognito-idp:* is a full service wildcard, not a hand-picked action list —
+# it was a narrower list originally, but the AWS provider's aws_cognito_*
+# resources turned out to need a long tail of dedicated per-config read
+# calls (GetUserPoolMfaConfig, etc.) beyond the obvious Create/Delete/
+# Describe/Update ones, discovered one broken `apply` at a time. Since
+# every Cognito action here is already Resource "*" anyway (pool/client
+# IDs are opaque, can't be pre-scoped — see above), narrowing the action
+# list bought no real resource-level isolation, just fragility. ECS/SNS/
+# CloudWatch Alarms/Logs below hit the SAME class of gap (their own
+# List/GetTags-style calls, needed for the AWS provider to read back tags
+# on refresh) — those keep hand-picked action lists since they're each a
+# small, well-bounded set AND (unlike Cognito) actually get real ARN-level
+# resource scoping worth preserving; each fix is called out at its own
+# statement below.
+#
 # The Terraform role also needs read-only access to the bare (un-prefixed)
 # "books-api.tfstate" key, not just its own "env:/$ENVIRONMENT/..." one —
 # `terraform init` always checks state at whatever workspace is currently
@@ -356,6 +371,7 @@ TF_POLICY=$(cat <<JSON
       "Action": [
         "ecs:CreateCluster", "ecs:DeleteCluster", "ecs:DescribeClusters",
         "ecs:PutClusterCapacityProviders", "ecs:TagResource", "ecs:UntagResource",
+        "ecs:ListTagsForResource",
         "ecs:CreateService", "ecs:DeleteService", "ecs:UpdateService", "ecs:DescribeServices"
       ],
       "Resource": [
@@ -368,7 +384,8 @@ TF_POLICY=$(cat <<JSON
       "Effect": "Allow",
       "Action": [
         "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition",
-        "ecs:DescribeTaskDefinition", "ecs:ListTaskDefinitions"
+        "ecs:DescribeTaskDefinition", "ecs:ListTaskDefinitions",
+        "ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource"
       ],
       "Resource": "*"
     },
@@ -430,7 +447,11 @@ TF_POLICY=$(cat <<JSON
     {
       "Sid": "LogsThisEnvironmentsGroup",
       "Effect": "Allow",
-      "Action": ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:TagResource"],
+      "Action": [
+        "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy",
+        "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
+        "logs:ListTagsLogGroup"
+      ],
       "Resource": "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*"
     },
     {
@@ -442,16 +463,7 @@ TF_POLICY=$(cat <<JSON
     {
       "Sid": "Cognito",
       "Effect": "Allow",
-      "Action": [
-        "cognito-idp:CreateUserPool", "cognito-idp:DeleteUserPool",
-        "cognito-idp:DescribeUserPool", "cognito-idp:UpdateUserPool",
-        "cognito-idp:CreateUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:DescribeUserPoolDomain",
-        "cognito-idp:CreateUserPoolClient", "cognito-idp:DeleteUserPoolClient",
-        "cognito-idp:DescribeUserPoolClient", "cognito-idp:UpdateUserPoolClient",
-        "cognito-idp:CreateResourceServer", "cognito-idp:DeleteResourceServer",
-        "cognito-idp:DescribeResourceServer", "cognito-idp:UpdateResourceServer",
-        "cognito-idp:TagResource"
-      ],
+      "Action": "cognito-idp:*",
       "Resource": "*"
     },
     {
@@ -463,13 +475,19 @@ TF_POLICY=$(cat <<JSON
     {
       "Sid": "SnsThisEnvironmentsTopic",
       "Effect": "Allow",
-      "Action": ["sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes", "sns:TagResource"],
+      "Action": [
+        "sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes",
+        "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource"
+      ],
       "Resource": "arn:aws:sns:$AWS_REGION:$ACCOUNT_ID:${NAME_PREFIX}-alerts"
     },
     {
       "Sid": "AlarmsThisEnvironment",
       "Effect": "Allow",
-      "Action": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource"],
+      "Action": [
+        "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms",
+        "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"
+      ],
       "Resource": "arn:aws:cloudwatch:$AWS_REGION:$ACCOUNT_ID:alarm:${NAME_PREFIX}-*"
     },
     {

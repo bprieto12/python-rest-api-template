@@ -244,22 +244,40 @@ per environment, so read it there for the literal JSON. The shape:
   managed.
 - **Still service-wide (`service:*`) on `Resource: "*"`, deliberately, not
   tightened further:** `ec2:*`, `elasticloadbalancing:*`, `apigateway:*`,
-  and Cognito's own action list (though narrowed off the full
-  `cognito-idp:*`, it isn't resource-scoped). Two different reasons force
-  this: (a) VPC/ALB/API Gateway resource-level IAM restriction is
-  inconsistent enough across individual EC2/ELB/API-Gateway-v2 actions that
-  enumerating them action-by-action risks silently breaking a live `apply`
-  partway through — worse than leaving the service open; (b) Cognito user
-  pool/API Gateway API IDs are opaque and assigned at creation, so there's
-  no ARN to pre-scope to before the first `apply` ever runs. **The residual
-  gap:** with these, a compromised or misconfigured Terraform role in one
-  environment could still reach *any* VPC/ALB/API Gateway/Cognito resource
-  in the account, not just its own environment's — acceptable here only
-  because nothing else in the account uses those services.
+  `cognito-idp:*`. Two different reasons force this: (a) VPC/ALB/API
+  Gateway resource-level IAM restriction is inconsistent enough across
+  individual EC2/ELB/API-Gateway-v2 actions that enumerating them
+  action-by-action risks silently breaking a live `apply` partway
+  through — worse than leaving the service open; (b) Cognito user pool/API
+  Gateway API IDs are opaque and assigned at creation, so there's no ARN to
+  pre-scope to before the first `apply` ever runs — every Cognito action
+  here was *already* `Resource: "*"` regardless of how the action list was
+  written, so narrowing the actions bought no real isolation, only
+  fragility (a hand-picked Cognito action list broke a real `apply` on
+  `GetUserPoolMfaConfig`, a read call needed to populate a computed
+  attribute that isn't obvious from the resource's own Create/Update/
+  Describe actions — not the only one of its kind, most likely). **The
+  residual gap:** with these, a compromised or misconfigured Terraform role
+  in one environment could still reach *any* VPC/ALB/API Gateway/Cognito
+  resource in the account, not just its own environment's — acceptable
+  here only because nothing else in the account uses those services.
 - `ecs:RegisterTaskDefinition`/`DeregisterTaskDefinition`/
-  `DescribeTaskDefinition`/`ListTaskDefinitions` are also `Resource: "*"` —
-  these don't support resource-level permissions at all per AWS's own ECS
-  IAM reference, regardless of how narrowly you'd like to scope them.
+  `DescribeTaskDefinition`/`ListTaskDefinitions`/`TagResource`/
+  `UntagResource`/`ListTagsForResource` are also `Resource: "*"` — task
+  definition actions don't support resource-level permissions at all per
+  AWS's own ECS IAM reference, regardless of how narrowly you'd like to
+  scope them. (The cluster/service actions in the same statement group
+  *do* get scoped to this environment's own cluster/service ARNs — see
+  `scripts/bootstrap.sh`'s `EcsClusterAndService` statement.)
+- ECS cluster/service, SNS, and CloudWatch (Alarms and Logs) each also
+  needed a `ListTagsForResource`/`ListTagsLogGroup`-style read action added
+  alongside the obvious `TagResource` write — the same class of gap as
+  Cognito's `GetUserPoolMfaConfig` above, but these three keep their
+  hand-picked action lists (rather than going to a service-wide wildcard
+  like Cognito did) because they *do* get real ARN-level resource scoping
+  worth preserving, and each one's action set is small and well-bounded
+  enough that hand-picking hasn't proven as fragile as Cognito's turned
+  out to be.
 
 Run `apply` from a separate role than the one CD assumes — don't widen the
 deploy role just to let CI run Terraform too. In CI this is
