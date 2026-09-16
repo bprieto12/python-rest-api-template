@@ -82,7 +82,7 @@ jobs:
         with:
           terraform_version: "1.10.5" # must stay >= 1.10 for native S3 state locking (use_lockfile)
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.TF_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -129,7 +129,7 @@ jobs:
         with:
           terraform_version: "1.10.5"
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.TF_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
