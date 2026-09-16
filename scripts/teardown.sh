@@ -217,11 +217,11 @@ echo
 echo "== 5. GitHub Environment '$ENVIRONMENT' secrets/variables =="
 
 if [ -n "$REPO_NWO" ]; then
-  for s in AWS_DEPLOY_ROLE_ARN TF_DEPLOY_ROLE_ARN; do
+  for s in AWS_DEPLOY_ROLE_ARN TF_DEPLOY_ROLE_ARN COGNITO_CLIENT_SECRET; do
     gh secret delete "$s" --env "$ENVIRONMENT" --repo "$REPO_NWO" 2>/dev/null \
       && echo "$s: deleted" || echo "$s: already gone"
   done
-  for v in DOMAIN_NAME HOSTED_ZONE_NAME TF_STATE_BUCKET ECS_SUBNETS ECS_SECURITY_GROUPS; do
+  for v in DOMAIN_NAME HOSTED_ZONE_NAME TF_STATE_BUCKET ECS_SUBNETS ECS_SECURITY_GROUPS COGNITO_CLIENT_ID COGNITO_DOMAIN; do
     gh variable delete "$v" --env "$ENVIRONMENT" --repo "$REPO_NWO" 2>/dev/null \
       && echo "$v: deleted" || echo "$v: already gone"
   done
