@@ -237,6 +237,17 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # $ENVIRONMENT — both environments' DNS records live in the SAME shared
 # zone (see route53.tf), so this one action is unavoidably shared between
 # every environment's Terraform role.
+#
+# The Terraform role also needs read-only access to the bare (un-prefixed)
+# "books-api.tfstate" key, not just its own "env:/$ENVIRONMENT/..." one —
+# `terraform init` always checks state at whatever workspace is currently
+# selected BEFORE any `terraform workspace select` runs, which on a fresh
+# checkout (CI, or a new clone) is the unnamed "default" workspace, whose
+# key has no "env:/" prefix at all. Without this, init itself 403s before
+# ever reaching the real workspace. Read-only is deliberate — the "default"
+# workspace should hold nothing after migration (see
+# terraform/environment.tf and docs/RUNBOOK.md's "Environments" section),
+# so this role should never need to WRITE there.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -299,6 +310,12 @@ TF_POLICY=$(cat <<JSON
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
       "Resource": "arn:aws:s3:::$TF_STATE_BUCKET/env:/$ENVIRONMENT/books-api.tfstate*"
+    },
+    {
+      "Sid": "StateBackendInitBareKeyReadOnly",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::$TF_STATE_BUCKET/books-api.tfstate"
     },
     {
       "Sid": "StateBackendListThisEnvironmentOnly",
