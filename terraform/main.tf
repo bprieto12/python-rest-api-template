@@ -43,6 +43,44 @@ resource "aws_ecs_task_definition" "this" {
   }
 }
 
+# TEMPORARY — kept declared (unreferenced) on purpose, see the comment
+# inside. Remove this whole resource in a follow-up apply once the listener
+# change above has landed cleanly, then apply once more to actually delete
+# the AWS-side target group.
+resource "aws_lb_target_group" "this" {
+  # This resource address/name must match exactly what was here before Kong
+  # existed — Terraform maps it back onto the SAME already-existing AWS
+  # target group (books-api's original one), not a new one, which is the
+  # whole point: it stops Terraform from trying to destroy it.
+  #
+  # Why it's here at all: Terraform (or the AWS provider, for
+  # aws_lb_listener/aws_lb_target_group specifically) doesn't reliably order
+  # "repoint the listener at Kong's target group" before "destroy the
+  # now-orphaned books-api target group" within a single apply, even though
+  # nothing references this by the time the delete runs — confirmed twice
+  # against real staging infra (ResourceInUse: "currently in use by a
+  # listener or a rule", even after the listener's own update had already
+  # gone through). Letting the listener change land on its own first, then
+  # deleting this in a *separate* apply once that's confirmed, avoids the
+  # race entirely.
+  name        = local.name_prefix
+  port        = local.api_container.portMappings[0].containerPort
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.this.id
+  target_type = "ip"
+
+  health_check {
+    path                = "/healthz"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  deregistration_delay = 30
+}
+
 resource "aws_ecs_service" "this" {
   name             = local.task_definition.family
   cluster          = aws_ecs_cluster.this.id
