@@ -88,6 +88,18 @@ resource "aws_ecs_service" "this" {
     # CD owns rollouts (`register-task-definition` + `update-service
     # --force-new-deployment`) and scaling is managed outside this repo —
     # Terraform shouldn't revert either on the next apply.
-    ignore_changes = [task_definition, desired_count]
+    #
+    # service_connect_configuration joined this list the hard way: cd.yml's
+    # deploy job has to resend it on every `update-service` call (confirmed
+    # against real staging infra that AWS silently *clears* it if omitted —
+    # it does not persist across an update the way most unspecified fields
+    # do). With Terraform ALSO actively managing this block, both `cd.yml`
+    # and `terraform.yml` trigger on every push to main with no ordering
+    # between them — so they raced to be "the last writer," and Kong's only
+    # path to books-api kept getting wiped moments after CD had just set it
+    # correctly. Terraform still sets it on creation/first apply; every
+    # apply after that, CD is the sole owner, exactly like task_definition
+    # and desired_count above.
+    ignore_changes = [task_definition, desired_count, service_connect_configuration]
   }
 }
