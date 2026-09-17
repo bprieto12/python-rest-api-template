@@ -128,6 +128,20 @@ resource "aws_ecs_service" "kong" {
     container_port   = local.kong_container.portMappings[0].containerPort
   }
 
+  # Resolving another service's Service Connect DNS name (books-api, see
+  # main.tf) requires the CALLING task to be Service-Connect-enabled too,
+  # not just the one being called — that's what installs the per-task Envoy
+  # sidecar that intercepts and resolves those names. Confirmed the hard way
+  # against real staging infra: without this, Kong's upstream requests fail
+  # with "name resolution failed", even though books-api's own
+  # configuration was completely correct. No `service` block needed here —
+  # Kong doesn't need to expose itself via Service Connect (the ALB target
+  # group above is how traffic reaches Kong), it only needs to consume it.
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.this.arn
+  }
+
   health_check_grace_period_seconds = 30
 
   deployment_maximum_percent         = 200
@@ -144,7 +158,12 @@ resource "aws_ecs_service" "kong" {
 
   lifecycle {
     # Same reasoning as aws_ecs_service.this (main.tf) — CD owns rollouts,
-    # scaling is managed outside this repo.
-    ignore_changes = [task_definition, desired_count]
+    # scaling is managed outside this repo. service_connect_configuration
+    # joined this list for the same reason it did there: cd.yml's
+    # deploy-kong job has to resend it on every update-service call or AWS
+    # silently clears it, and Terraform would otherwise fight CD over it on
+    # every push to main (terraform.yml runs unconditionally, concurrently
+    # with cd.yml, with no ordering between them).
+    ignore_changes = [task_definition, desired_count, service_connect_configuration]
   }
 }

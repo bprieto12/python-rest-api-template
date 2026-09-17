@@ -297,10 +297,21 @@ jobs:
           echo "arn=$arn" >> "$GITHUB_OUTPUT"
 
       - name: Update the service and wait for it to stabilize
+        # --service-connect-configuration resent every deploy, same reason
+        # as the plain `deploy` job above: AWS silently clears it if
+        # omitted, and this must be JSON, not CLI shorthand (shorthand
+        # silently no-ops on this API — confirmed against real staging
+        # infra). Kong doesn't expose a `services` entry of its own (see
+        # terraform/kong.tf) — it only needs enabled+namespace to get the
+        # Envoy sidecar that lets it resolve books-api's Service Connect DNS
+        # name; without this, Kong's upstream calls fail with "name
+        # resolution failed" even though books-api's own config is correct.
         run: |
+          SERVICE_CONNECT_CONFIG='{"enabled":true,"namespace":"'"${NAME_PREFIX}"'.internal"}'
           aws ecs update-service \
             --cluster "$NAME_PREFIX" \
             --service "$NAME_PREFIX-kong" \
             --task-definition "${{ steps.register.outputs.arn }}" \
+            --service-connect-configuration "$SERVICE_CONNECT_CONFIG" \
             --force-new-deployment
           aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX-kong"
