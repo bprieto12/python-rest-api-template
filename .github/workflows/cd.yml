@@ -136,18 +136,26 @@ jobs:
         # is why those two are plain `ignore_changes` in Terraform instead of
         # something CD has to keep resending). Omitting this once wiped
         # Kong's only path to books-api and sent the service into a
-        # deployment-circuit-breaker loop. The shape here must stay in sync
-        # with aws_ecs_service.this's service_connect_configuration block in
-        # terraform/main.tf — namespace is "$NAME_PREFIX.internal"
-        # (terraform/kong.tf's aws_service_discovery_http_namespace), portName
-        # "api" and containerPort 8000 come from the api container's named
-        # portMapping in ecs/task-definition.<environment>.json.
+        # deployment-circuit-breaker loop.
+        #
+        # Passed as JSON, not CLI shorthand — shorthand's nested
+        # list-of-maps-of-list-of-maps here (services=[{...clientAliases=[{...}]}])
+        # silently no-ops on this API (confirmed: three deploys in a row set
+        # it with no error, and serviceConnectConfiguration stayed null the
+        # whole time). AWS's own docs for this flag use JSON for exactly this
+        # reason. The shape must stay in sync with aws_ecs_service.this's
+        # service_connect_configuration block in terraform/main.tf —
+        # namespace is "$NAME_PREFIX.internal" (terraform/kong.tf's
+        # aws_service_discovery_http_namespace), portName "api" and
+        # containerPort 8000 come from the api container's named portMapping
+        # in ecs/task-definition.<environment>.json.
         run: |
+          SERVICE_CONNECT_CONFIG='{"enabled":true,"namespace":"'"${NAME_PREFIX}"'.internal","services":[{"portName":"api","clientAliases":[{"port":8000,"dnsName":"books-api"}]}]}'
           aws ecs update-service \
             --cluster "$NAME_PREFIX" \
             --service "$NAME_PREFIX" \
             --task-definition "${{ steps.register.outputs.arn }}" \
-            --service-connect-configuration "enabled=true,namespace=${NAME_PREFIX}.internal,services=[{portName=api,clientAliases=[{port=8000,dnsName=books-api}]}]" \
+            --service-connect-configuration "$SERVICE_CONNECT_CONFIG" \
             --force-new-deployment
           aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX"
 
