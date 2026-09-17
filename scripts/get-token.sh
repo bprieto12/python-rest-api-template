@@ -35,7 +35,7 @@ tf_output_json_field() {
 CLIENT_ID="${COGNITO_CLIENT_ID:-$(tf_output_json_field cognito_client_ids)}"
 CLIENT_SECRET="${COGNITO_CLIENT_SECRET:-$(tf_output_json_field cognito_client_secrets)}"
 DOMAIN="${COGNITO_DOMAIN:-$(tf_output cognito_domain)}"
-
+echo "Client ID: $CLIENT_ID"
 echo "Requesting token (scope: $SCOPE)..." >&2
 
 RESPONSE="$(curl -sS -u "$CLIENT_ID:$CLIENT_SECRET" \

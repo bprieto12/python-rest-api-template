@@ -213,6 +213,32 @@ jobs:
             > ecs/kong/consumers.json
           cat ecs/kong/consumers.json
 
+      - name: Determine the signing kid from a real token
+        # Cognito can (and, against this account, does) publish more than
+        # one active RSA signing key at once — the JWKS list alone gives no
+        # way to tell which one current tokens are actually signed with, and
+        # guessing wrong means Kong rejects every real token with "Invalid
+        # signature" (confirmed the hard way against real staging infra).
+        # Fetching one real token and reading its header's `kid` is the only
+        # reliable way to know. Uses the "default" consumer's credentials
+        # (COGNITO_CLIENT_ID/COGNITO_CLIENT_SECRET/COGNITO_DOMAIN — the same
+        # GitHub Environment secret/variables scripts/bootstrap.sh sets for
+        # performance.yml's k6 run) purely as a probe; this has nothing to
+        # do with which consumers actually get provisioned in kong.yml.
+        run: |
+          RESPONSE=$(curl -sS -u "${{ vars.COGNITO_CLIENT_ID }}:${{ secrets.COGNITO_CLIENT_SECRET }}" \
+            -d grant_type=client_credentials -d "scope=books-api/read" \
+            "https://${{ vars.COGNITO_DOMAIN }}.auth.${AWS_REGION}.amazoncognito.com/oauth2/token")
+          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          KID=$(echo "$TOKEN" | cut -d. -f1 | python3 -c "
+          import sys, base64, json
+          s = sys.stdin.read().strip()
+          s += '=' * (-len(s) % 4)
+          print(json.loads(base64.urlsafe_b64decode(s))['kid'])
+          ")
+          echo "Signing kid from a live token: $KID"
+          echo "SIGNING_KID=$KID" >> "$GITHUB_ENV"
+
       - name: Render kong.yml
         run: |
           pip install --quiet cryptography
@@ -222,6 +248,7 @@ jobs:
             --rate-limits "ecs/kong/rate-limits.${{ needs.set-environment.outputs.environment }}.json" \
             --upstream-host books-api \
             --upstream-port 8000 \
+            --signing-kid "$SIGNING_KID" \
             --out ecs/kong/kong.yml
           rm -f ecs/kong/jwks.json ecs/kong/consumers.json # client ids aren't secret, but no reason to leave them in the build context after use
 

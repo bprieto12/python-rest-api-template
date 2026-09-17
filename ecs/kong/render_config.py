@@ -27,6 +27,14 @@ Usage:
 `rate-limits.json` — {"default": {"minute": N}, "<name>": {"minute": N}, ...};
   see ecs/kong/rate-limits.<environment>.json. Any name without its own entry
   falls back to "default".
+`--signing-kid` — optional. Cognito can publish more than one active RSA
+  signing key at once (confirmed against real staging infra — not a rare
+  rotation edge case, just a thing that happens), and the JWKS response
+  gives no way to tell from the key list alone which one current tokens are
+  actually signed with. Pass the `kid` from a real, freshly-issued token's
+  header (cd.yml's build-and-push-kong job does this) to pick the *correct*
+  key deterministically. Without it, this falls back to the first RSA
+  signing key in the JWKS and prints a warning — a guess, not a guarantee.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import sys
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -62,6 +71,7 @@ def main() -> None:
     parser.add_argument("--rate-limits", required=True)
     parser.add_argument("--upstream-host", required=True)
     parser.add_argument("--upstream-port", required=True, type=int)
+    parser.add_argument("--signing-kid", default=None)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -77,10 +87,25 @@ def main() -> None:
     ]
     if not signing_keys:
         raise SystemExit("No RSA signing key found in the JWKS response")
-    # Cognito user pools normally publish exactly one active signing key;
-    # if more than one shows up (mid-rotation), the first is as good a
-    # choice as any until this script is re-run after rotation settles.
-    rsa_public_key = jwk_to_pem(signing_keys[0])
+
+    chosen_key = None
+    if args.signing_kid:
+        chosen_key = next((k for k in signing_keys if k.get("kid") == args.signing_kid), None)
+        if chosen_key is None:
+            raise SystemExit(
+                f"--signing-kid {args.signing_kid!r} not found in the JWKS response "
+                f"(kids present: {[k.get('kid') for k in signing_keys]})"
+            )
+    if chosen_key is None:
+        if len(signing_keys) > 1:
+            print(
+                f"WARNING: JWKS has {len(signing_keys)} RSA signing keys and no --signing-kid "
+                "was given — guessing the first one. Kong's JWT verification will fail for any "
+                "token actually signed with a different key. Pass --signing-kid instead.",
+                file=sys.stderr,
+            )
+        chosen_key = signing_keys[0]
+    rsa_public_key = jwk_to_pem(chosen_key)
 
     default_limit = rate_limits.get("default", {"minute": 100})
 
