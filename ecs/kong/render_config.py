@@ -54,7 +54,9 @@ def jwk_to_pem(jwk: dict) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--jwks", required=True)
     parser.add_argument("--consumers", required=True)
     parser.add_argument("--rate-limits", required=True)
@@ -70,7 +72,9 @@ def main() -> None:
     with open(args.rate_limits) as f:
         rate_limits = json.load(f)
 
-    signing_keys = [k for k in jwks["keys"] if k.get("kty") == "RSA" and k.get("use", "sig") == "sig"]
+    signing_keys = [
+        k for k in jwks["keys"] if k.get("kty") == "RSA" and k.get("use", "sig") == "sig"
+    ]
     if not signing_keys:
         raise SystemExit("No RSA signing key found in the JWKS response")
     # Cognito user pools normally publish exactly one active signing key;
@@ -114,7 +118,11 @@ def main() -> None:
         override = rate_limits.get(name)
         if override:
             config["plugins"].append(
-                {"name": "rate-limiting", "consumer": name, "config": {**override, "policy": "local"}}
+                {
+                    "name": "rate-limiting",
+                    "consumer": name,
+                    "config": {**override, "policy": "local"},
+                }
             )
 
     with open(args.out, "w") as f:
