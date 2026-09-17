@@ -129,11 +129,25 @@ jobs:
           echo "arn=$arn" >> "$GITHUB_OUTPUT"
 
       - name: Update the service and wait for it to stabilize
+        # --service-connect-configuration is resent explicitly, every deploy
+        # — confirmed against real staging infra that UpdateService silently
+        # *clears* serviceConnectConfiguration if it's omitted, it does not
+        # leave it unchanged the way task-definition/desired-count do (which
+        # is why those two are plain `ignore_changes` in Terraform instead of
+        # something CD has to keep resending). Omitting this once wiped
+        # Kong's only path to books-api and sent the service into a
+        # deployment-circuit-breaker loop. The shape here must stay in sync
+        # with aws_ecs_service.this's service_connect_configuration block in
+        # terraform/main.tf — namespace is "$NAME_PREFIX.internal"
+        # (terraform/kong.tf's aws_service_discovery_http_namespace), portName
+        # "api" and containerPort 8000 come from the api container's named
+        # portMapping in ecs/task-definition.<environment>.json.
         run: |
           aws ecs update-service \
             --cluster "$NAME_PREFIX" \
             --service "$NAME_PREFIX" \
             --task-definition "${{ steps.register.outputs.arn }}" \
+            --service-connect-configuration "enabled=true,namespace=${NAME_PREFIX}.internal,services=[{portName=api,clientAliases=[{port=8000,dnsName=books-api}]}]" \
             --force-new-deployment
           aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX"
 
