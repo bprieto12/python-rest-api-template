@@ -298,67 +298,96 @@ human user accounts; Cognito's user pool exists solely to issue tokens to
 app clients. See `terraform/README.md`'s "Auth" section for the full
 request-path reasoning.
 
-Right now there's **one shared app client**, `books-api-client`
-(`terraform/cognito.tf`), used by every caller. That's fine while there's
-one real consumer; once there's more than one, giving each its own client is
-worth doing so you can revoke one without touching the others, and so
+Every caller gets its own Cognito client **and** its own Kong consumer/rate
+limit, both driven off one list: `var.api_consumers`
+(`terraform/variables.tf`, default `["default"]` — today's one real caller).
+Adding a name there is the one step that provisions both sides — you don't
+touch `terraform/cognito.tf` or Kong's config directly for the common case.
+
+**To add a new caller:**
+
+1. Add their name to `var.api_consumers` (a `terraform.tfvars` entry, or a
+   `-var` flag) and `terraform apply` — this creates their Cognito client
+   (`terraform/cognito.tf`'s `for_each`) and adds their `client_id` as a
+   valid audience on API Gateway's JWT authorizer (`terraform/api_gateway.tf`).
+2. Optionally give them a non-default rate limit: add an entry for their name
+   in `ecs/kong/rate-limits.<environment>.json` (falls back to `"default"`'s
+   limit if you skip this — see "How to view/change a consumer's rate limit"
+   below).
+3. Redeploy Kong (`.github/workflows/cd.yml`'s `deploy-kong` job, or a normal
+   push to `main`/`v*` tag) — this is what actually picks up the new
+   consumer and rate limit; `terraform apply` alone only provisions the
+   Cognito side, since Kong's declarative config is baked into its image at
+   build time, not read from Terraform state.
+4. `terraform output -json cognito_client_ids` (and `cognito_client_secrets`)
+   to get their id/secret, keyed by the name you added — hand it to them out
+   of band. They use it exactly like any other caller — see "How to make a
+   request" below (`CONSUMER=<name> scripts/get-token.sh`).
+
+**To remove a caller:** delete their name from `var.api_consumers`,
+`terraform apply`, then redeploy Kong the same way. Any token they already
+hold stays valid until it expires (see the token lifetime note below) — this
+revokes their ability to get a *new* one and to pass Kong's rate-limiting
+consumer lookup, not whatever bearer token they're already holding.
+
 "Top Consumers" on the dashboard (and the `consumer` field in the API
-Gateway access log — see "How to view logs" above) actually distinguishes
-callers instead of showing one entry for everyone. The aggregate
-`AWS/ApiGateway` *metrics* still can't be split per caller (that's a
-per-request log fact, not something CloudWatch's own API Gateway metrics
-carry a dimension for) — but per-request attribution, which is the thing
-you'd reach for first when debugging one caller's behavior, already works
-today off the access log alone.
+Gateway access log — see "How to view logs" above) is keyed off `client_id`,
+so it only distinguishes callers once each has its own client — with the
+one default consumer today, every request still shows up as `"default"`.
 
-**To add a new caller**, add another client to `terraform/cognito.tf`:
+### How to view/change a consumer's rate limit
 
-```hcl
-resource "aws_cognito_user_pool_client" "some_new_caller" {
-  name         = "some-new-caller"
-  user_pool_id = aws_cognito_user_pool.this.id
+Rate limits live in `ecs/kong/rate-limits.<environment>.json` — a plain
+JSON file, not Terraform state, so changing a number doesn't need
+`terraform apply`, just a Kong redeploy (push to `main`/`v*`, or
+`workflow_dispatch` on `cd.yml` targeting `deploy-kong`):
 
-  generate_secret                      = true
-  allowed_oauth_flows_user_pool_client = true
-  allowed_oauth_flows                  = ["client_credentials"]
-  allowed_oauth_scopes = [
-    "${aws_cognito_resource_server.this.identifier}/read",
-    "${aws_cognito_resource_server.this.identifier}/write",
-  ]
-  supported_identity_providers = ["COGNITO"]
+```json
+{
+  "default": { "minute": 100 },
+  "some-consumer": { "minute": 20 }
 }
 ```
 
-Add matching outputs (there's currently only one `cognito_client_id`/
-`cognito_client_secret` pair in `terraform/outputs.tf`, for the one existing
-client — a second caller needs its own named outputs), `terraform apply`,
-then hand the new caller their client id/secret out of band. They use them
-exactly like the existing client — see "How to make a request" below.
+Any consumer without its own entry falls back to `"default"`'s limit. See
+`ecs/kong/render_config.py` for exactly how this turns into Kong's
+declarative config, and `terraform/README.md`'s "Why Kong sits in the
+middle" for why this exists instead of an API Gateway usage plan (HTTP API
+doesn't support them) and why the limit is per-Kong-task, not global
+(`policy: local`, `var.kong_desired_count = 1`).
 
-**To remove a caller:** delete their `aws_cognito_user_pool_client` resource
-and `terraform apply`. Any token they already hold stays valid until it
-expires (see the token lifetime note below) — this revokes their ability to
-get a *new* one, not whatever they're already holding.
-
-If you expect to add callers often, it's worth refactoring this to a
-`for_each` over a variable map of caller names instead of one resource block
-per caller — a natural follow-up whenever that becomes true, not done now
-since there's only ever been the one.
+To check whether a caller is actually being throttled: Kong returns
+`429` with `RateLimit-*`/`X-RateLimit-*-Minute` response headers on every
+request (even successful ones, so you can see how close to the limit a
+caller is without waiting for a 429) — `docs/RUNBOOK.md`'s "How to view
+logs" above covers the API Gateway access log, which still shows the
+request reaching API Gateway even when Kong subsequently rate-limits it
+(Kong's rejection happens downstream of the gateway, so a 429 from Kong
+doesn't show up as an API Gateway-level rejection).
 
 ## Authentication
 
 ### How to make a request
 
-1. Get a client id + secret — either the existing shared one, or a new one
-   provisioned per "How to add a user" above.
+1. Get a client id + secret — either the existing `"default"` consumer's, or
+   a new one provisioned per "How to add a user" above.
 2. Exchange it for a bearer token with `scripts/get-token.sh` (wraps the
-   OAuth2 client-credentials grant against Cognito):
+   OAuth2 client-credentials grant against Cognito). With local Terraform
+   state, it looks up your consumer's id/secret itself — just say which one:
+   ```bash
+   CONSUMER=default TOKEN=$(scripts/get-token.sh)   # CONSUMER defaults to "default" if unset
+
+   # defaults to requesting both books-api/read and books-api/write; narrow it:
+   CONSUMER=default scripts/get-token.sh books-api/read
+   ```
+   No local state (CI, a teammate's machine)? Skip `CONSUMER` and set the
+   credentials directly instead:
    ```bash
    export COGNITO_CLIENT_ID=...
    export COGNITO_CLIENT_SECRET=...
    export COGNITO_DOMAIN=...       # from `terraform output -raw cognito_domain`, or ask whoever provisioned your client
 
-   TOKEN=$(scripts/get-token.sh)   # defaults to requesting both books-api/read and books-api/write
+   TOKEN=$(scripts/get-token.sh)
    ```
 3. Call the API with it:
    ```bash

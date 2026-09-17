@@ -20,5 +20,6 @@ domain_name      = "books-api.example.com"    # per-environment — e.g. staging
 # vpc_cidr           = "10.0.0.0/16"
 # az_count           = 2
 # single_nat_gateway = true
-# health_check_path  = "/healthz"
 # desired_count      = 2
+# api_consumers      = ["default"]
+# kong_desired_count = 1

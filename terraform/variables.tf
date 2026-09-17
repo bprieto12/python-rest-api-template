@@ -32,14 +32,20 @@ variable "domain_name" {
   type        = string
 }
 
-variable "health_check_path" {
-  description = "HTTP path the target group health checks against."
-  type        = string
-  default     = "/healthz"
-}
-
 variable "desired_count" {
   description = "Initial desired task count. Ignored after the first apply — CD's deploys don't change it, so scale via the console/CLI/autoscaling, not by re-applying this."
   type        = number
   default     = 2
+}
+
+variable "api_consumers" {
+  description = "Names of the API callers that get their own Cognito client-credentials client and their own Kong consumer/rate limit (see terraform/cognito.tf and terraform/kong.tf). Seeded with just today's one real caller — add a name here (and see docs/RUNBOOK.md's \"How to add a user\") when a second one shows up."
+  type        = list(string)
+  default     = ["default"]
+}
+
+variable "kong_desired_count" {
+  description = "Kong's task count. Deliberately kept separate from desired_count (books-api's) and pinned to 1 by default — Kong's rate-limiting plugin uses the in-memory \"local\" policy, which is only accurate as long as exactly one task is enforcing it. Raising this without also moving to a shared (Redis-backed) rate-limit policy means limits get enforced per-task, not globally."
+  type        = number
+  default     = 1
 }

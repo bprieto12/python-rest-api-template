@@ -50,11 +50,18 @@ resource "aws_cognito_resource_server" "this" {
   }
 }
 
-# The one app client every caller shares — generate_secret = true is what
-# makes this a confidential client, required for the client-credentials
+# One app client per entry in var.api_consumers — generate_secret = true is
+# what makes each a confidential client, required for the client-credentials
 # grant (there's no browser/redirect involved to justify a public client).
-resource "aws_cognito_user_pool_client" "this" {
-  name         = "${local.name_prefix}-client"
+# Each consumer's client_id is also what Kong's JWT plugin keys its
+# per-consumer rate limit on (see ../kong.tf's kong.yml.template) — API
+# Gateway's JWT authorizer (api_gateway.tf) accepts every id in this map as a
+# valid audience, so adding a name here is enough to let that consumer in;
+# Kong is what actually tells them apart afterward.
+resource "aws_cognito_user_pool_client" "consumers" {
+  for_each = toset(var.api_consumers)
+
+  name         = "${local.name_prefix}-${each.key}"
   user_pool_id = aws_cognito_user_pool.this.id
 
   generate_secret = true

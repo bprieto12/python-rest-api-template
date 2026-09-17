@@ -1,7 +1,9 @@
 # Internal — API Gateway (api_gateway.tf) is the only public entry point.
-# Dedicated to this one service: the listener forwards straight to
-# books-api's target group, no host-header routing/listener rules, since
-# there's nothing else behind it to route between.
+# The listener forwards straight to Kong's target group (kong.tf), not
+# books-api's — Kong is what proxies on to books-api from there, over ECS
+# Service Connect, after verifying the caller's JWT and applying its
+# per-consumer rate limit. No host-header routing/listener rules here, since
+# there's still nothing else behind this ALB to route between.
 #
 # Plain HTTP, not HTTPS: API Gateway's HTTP_PROXY + VPC_LINK private
 # integration to an ALB doesn't perform TLS to the target regardless of
@@ -26,6 +28,6 @@ resource "aws_lb_listener" "http" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.this.arn
+    target_group_arn = aws_lb_target_group.kong.arn
   }
 }

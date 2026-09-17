@@ -20,6 +20,11 @@ resource "aws_apigatewayv2_vpc_link" "this" {
 # ID tokens do). API Gateway specifically falls back to checking `client_id`
 # against `audience` when `aud` is absent, which is exactly the case here —
 # documented Cognito/API Gateway integration behavior, not a workaround.
+#
+# `audience` lists every consumer's client id (cognito.tf's for_each over
+# var.api_consumers) — this authorizer only proves a token is valid for
+# *some* known consumer, same as before there was more than one client. It
+# doesn't (and can't) tell them apart; that's Kong's job, downstream.
 resource "aws_apigatewayv2_authorizer" "cognito" {
   api_id           = aws_apigatewayv2_api.this.id
   name             = "cognito-client-credentials"
@@ -27,7 +32,7 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
   identity_sources = ["$request.header.Authorization"]
 
   jwt_configuration {
-    audience = [aws_cognito_user_pool_client.this.id]
+    audience = [for c in aws_cognito_user_pool_client.consumers : c.id]
     issuer   = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.this.id}"
   }
 }
