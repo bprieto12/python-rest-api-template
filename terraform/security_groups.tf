@@ -30,8 +30,17 @@ resource "aws_security_group" "ecs_tasks" {
   # books-api no longer registers with the ALB directly (see kong.tf/alb.tf)
   # — Kong does, and reaches books-api over ECS Service Connect instead. So
   # this SG's only ingress is from Kong's tasks now, not the ALB.
+  #
+  # `description` is deliberately left at its original (now stale-sounding)
+  # text, NOT updated to match — description is ForceNew on this resource
+  # (see aws_security_group.alb's comment above for the same gotcha), and
+  # this SG has a fixed `name` with no create_before_destroy, so changing it
+  # tries to destroy-then-recreate under the same name while live books-api
+  # tasks still hold ENIs on the old one — guaranteed DependencyViolation.
+  # Learned this the hard way against real staging infra; not worth the
+  # blast radius to fix for a comment-only accuracy nit.
   name        = "${local.name_prefix}-ecs-tasks"
-  description = "${local.name_prefix} task SG - ingress from Kong only (Service Connect)."
+  description = "${local.name_prefix} task SG - ingress from the ALB only."
   vpc_id      = aws_vpc.this.id
 
   ingress {
