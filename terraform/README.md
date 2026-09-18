@@ -292,14 +292,21 @@ per environment, so read it there for the literal JSON. The shape:
   environment's Terraform role. Nothing else about the zone (creation,
   deletion) is grantable at all, since it's looked up via `data`, never
   managed.
-- **`wafv2:CreateWebACL`/`UpdateWebACL` also need permission on every AWS
-  Managed Rule Group the Web ACL references** (`WafManagedRuleGroups`) —
-  confirmed against a real `apply`, not just inferred: each managed rule
-  group is its own IAM resource type
-  (`regional/managedruleset/<vendor>/<name>`), unrelated to `$NAME_PREFIX`,
-  so — like the hosted zone above — this is shared across every
-  environment's role rather than scoped per-environment. Hand-picked to the
-  three rule groups `waf.tf` actually references, not a wildcard.
+- **`wafv2:CreateWebACL`/`UpdateWebACL` also need permission on
+  `regional/managedruleset/*/*`** (`WafManagedRuleGroups`) whenever the Web
+  ACL references AWS Managed Rule Groups (waf.tf's three `rule` blocks) —
+  confirmed against two real `apply` attempts, the second of which ruled out
+  the obvious narrower fix: granting the three specific
+  `regional/managedruleset/AWS/AWSManagedRulesXxx` ARNs `waf.tf` actually
+  references still failed identically, because the AccessDenied error
+  itself names the checked resource as the literal double wildcard, not the
+  specific rule group that triggered it. This action's authorization
+  apparently doesn't discriminate by which managed rule group is
+  referenced — effectively `Resource: "*"` for this one statement (like
+  Cognito/ACM's opaque-ID cases above), just narrowed to wafv2's
+  `managedruleset` resource type. Shared across every environment's role
+  the same way the hosted zone below is, since there's no `$NAME_PREFIX` in
+  it to isolate by.
 - **Still service-wide (`service:*`) on `Resource: "*"`, deliberately, not
   tightened further:** `ec2:*`, `elasticloadbalancing:*`, `apigateway:*`,
   `cognito-idp:*`. Two different reasons force this: (a) VPC/ALB/API

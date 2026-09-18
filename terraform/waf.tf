@@ -135,10 +135,18 @@ resource "aws_wafv2_web_acl" "this" {
 
 # Attaches to the API Gateway *stage*, not the API itself — that's the
 # resource_arn shape aws_wafv2_web_acl_association expects for an HTTP API
-# (.../apis/<api-id>/stages/<stage-name>), which aws_apigatewayv2_stage.default.arn
-# already produces in the right form.
+# (.../apis/<api-id>/stages/<stage-name>).
+#
+# aws_apigatewayv2_stage.default.arn is NOT used as-is, deliberately — this
+# stage's name is the literal string "$default" (api_gateway.tf), and
+# WAFv2's own ARN parameter validation rejects the raw "$" character
+# outright (confirmed against a real `apply`: "The ARN isn't valid" on
+# exactly this resource_arn, even though it's a completely valid API
+# Gateway stage ARN — apigatewayv2's own APIs accept "$default" unencoded
+# everywhere else). The fix is percent-encoding just that one character —
+# WAFv2 accepts "%24default" in its place, same ARN otherwise.
 resource "aws_wafv2_web_acl_association" "this" {
-  resource_arn = aws_apigatewayv2_stage.default.arn
+  resource_arn = replace(aws_apigatewayv2_stage.default.arn, "$default", "%24default")
   web_acl_arn  = aws_wafv2_web_acl.this.arn
 }
 

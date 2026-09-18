@@ -330,15 +330,22 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # WafManagedRuleGroups (below) is a second, separate statement — confirmed
 # against a real `apply`: CreateWebACL/UpdateWebACL check permission not
 # just on the Web ACL being created but on every AWS Managed Rule Group it
-# *references* (waf.tf's three `rule` blocks), each its own IAM resource
-# type (regional/managedruleset/<vendor>/<name>) with no relation to
-# $NAME_PREFIX at all — these are AWS-vendored rule sets, shared across
-# every environment the same way route53:ChangeResourceRecordSets' hosted
-# zone is (see below), not something to fold into the per-environment
-# statement above. Hand-picked to the three rule groups waf.tf actually
-# uses rather than a `managedruleset/*/*` wildcard — add a fourth ARN here
-# if waf.tf ever references another one, same as every other resource-scoped
-# statement in this file.
+# *references* (waf.tf's three `rule` blocks). The obvious move — grant the
+# three specific ARNs waf.tf actually references
+# (regional/managedruleset/AWS/AWSManagedRulesCommonRuleSet etc.) — does
+# NOT work; confirmed against a real `apply` that still failed identically
+# with those three ARNs granted. The AccessDenied error itself names the
+# resource it actually checks as "regional/managedruleset/*/*" — a literal
+# double wildcard, not the specific vendor/name pair for whichever rule
+# group triggered it — so this action's authorization apparently doesn't
+# discriminate by which managed rule group is referenced at all. This is
+# the wafv2 equivalent of this file's other opaque-permission cases
+# (Cognito's pool ID, ACM's certificate ID): Resource: "*" in every
+# practical sense for this one statement, just narrowed to wafv2's
+# managedruleset resource type rather than the whole service. Shared across
+# every environment's Terraform role the same way
+# route53:ChangeResourceRecordSets' hosted zone is (see below) — there's no
+# `$NAME_PREFIX` in it to isolate by anyway.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -571,11 +578,7 @@ TF_POLICY=$(cat <<JSON
       "Sid": "WafManagedRuleGroups",
       "Effect": "Allow",
       "Action": ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"],
-      "Resource": [
-        "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/AWS/AWSManagedRulesCommonRuleSet",
-        "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/AWS/AWSManagedRulesKnownBadInputsRuleSet",
-        "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/AWS/AWSManagedRulesSQLiRuleSet"
-      ]
+      "Resource": "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/*/*"
     },
     {
       "Sid": "ApiGatewayAccessLogDelivery",
