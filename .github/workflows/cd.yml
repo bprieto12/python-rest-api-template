@@ -312,16 +312,26 @@ jobs:
           rm -f ecs/kong/jwks.json ecs/kong/consumers.json # client ids aren't secret, but no reason to leave them in the build context after use
 
       - uses: docker/setup-buildx-action@v3
-      - name: Build and push (skip if this commit's image already exists)
+      - name: Build and push
+        # Deliberately NOT skip-if-this-commit's-image-already-exists, unlike
+        # the plain `build-and-push` job above — that optimization assumes
+        # the image is a pure function of the code at this commit, which is
+        # true for books-api but not Kong: its image also bakes in *live*
+        # Cognito state (consumer list, JWKS) fetched moments ago, not
+        # anything tied to the git SHA. Confirmed the hard way: a retried
+        # workflow run at the same commit (e.g. re-running after an
+        # unrelated IAM permission fix) would otherwise skip rebuilding and
+        # redeploy a stale image with a since-recreated Cognito client's old
+        # id baked in — Kong then rejects every real token with "No
+        # credentials found for given 'client_id'", even though the token
+        # itself is perfectly valid. Always rebuilding costs little; this
+        # image is small and has no compile step.
         run: |
-          if docker manifest inspect "${{ steps.meta.outputs.image }}" >/dev/null 2>&1; then
-            echo "Image already exists for $GITHUB_SHA — reusing it, not rebuilding."
-          else
-            docker buildx build --push \
-              --cache-from type=gha,scope=kong --cache-to type=gha,mode=max,scope=kong \
-              -t "${{ steps.meta.outputs.image }}" \
-              -t "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" \
-              ecs/kong
+          docker buildx build --push \
+            --cache-from type=gha,scope=kong --cache-to type=gha,mode=max,scope=kong \
+            -t "${{ steps.meta.outputs.image }}" \
+            -t "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" \
+            ecs/kong
           fi
 
   deploy-kong:
