@@ -297,12 +297,19 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # build-and-push-kong job renders kong.yml (ecs/kong/render_config.py) from
 # the live consumer list + Cognito's JWKS before building that image, which
 # means reading Cognito directly — the CD role has no Terraform state access
-# (that's TF_POLICY's job, a different role), so it can't get the consumer
-# list from `terraform output` the way a human running scripts/get-token.sh
-# would. It gets the user pool id instead from the COGNITO_USER_POOL_ID
-# GitHub Environment variable (set in step 6 below, same as COGNITO_DOMAIN),
-# then lists that pool's clients directly — ListUserPoolClients alone
-# returns each client's name and id, which is all render_config.py needs.
+# (that's TF_POLICY's job, a different role), so it can't get any of this
+# from `terraform output` the way a human running scripts/get-token.sh
+# would. Everything is self-discovered at deploy time, not read from a
+# GitHub Environment variable/secret someone has to keep in sync by hand —
+# confirmed the hard way that a fresh teardown+bootstrap+release cycle can
+# reach this job with those never populated (nothing about cutting a
+# release *requires* bootstrap.sh's interactive local flow to have
+# succeeded first): ListUserPools finds the pool by its deterministic name
+# (local.name_prefix), ListUserPoolClients lists its clients (name + id,
+# all render_config.py needs), and DescribeUserPoolClient reads the
+# "default" consumer's secret directly (used only to fetch one probe token
+# to determine which of Cognito's currently-published signing keys is
+# actually in use — see the "Determine the signing kid" step in cd.yml).
 # Resource "*" for the same opaque-ID reason as cognito-idp:* elsewhere in
 # this file (a user pool ARN isn't scopeable to $NAME_PREFIX the way e.g.
 # the ECS service ARNs above are).
@@ -342,7 +349,11 @@ CD_POLICY=$(cat <<JSON
     {
       "Sid": "CognitoReadForKongConfig",
       "Effect": "Allow",
-      "Action": "cognito-idp:ListUserPoolClients",
+      "Action": [
+        "cognito-idp:ListUserPools",
+        "cognito-idp:ListUserPoolClients",
+        "cognito-idp:DescribeUserPoolClient"
+      ],
       "Resource": "*"
     },
     {
@@ -683,7 +694,6 @@ SG="$(cd "$TF_DIR" && terraform output -raw ecs_security_group_id)"
 COGNITO_CLIENT_ID_OUT="$(cd "$TF_DIR" && terraform output -json cognito_client_ids | python3 -c 'import sys,json; print(json.load(sys.stdin)["default"])')"
 COGNITO_CLIENT_SECRET_OUT="$(cd "$TF_DIR" && terraform output -json cognito_client_secrets | python3 -c 'import sys,json; print(json.load(sys.stdin)["default"])')"
 COGNITO_DOMAIN_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_domain)"
-COGNITO_USER_POOL_ID_OUT="$(cd "$TF_DIR" && terraform output -raw cognito_user_pool_id)"
 
 gh secret set AWS_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$CD_ROLE_ARN"
 gh secret set TF_DEPLOY_ROLE_ARN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$TF_ROLE_ARN"
@@ -695,15 +705,22 @@ gh variable set ECS_SUBNETS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SUB
 gh variable set ECS_SECURITY_GROUPS --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$SG"
 gh variable set COGNITO_CLIENT_ID --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_CLIENT_ID_OUT"
 gh variable set COGNITO_DOMAIN --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_DOMAIN_OUT"
-gh variable set COGNITO_USER_POOL_ID --env "$ENVIRONMENT" --repo "$REPO_NWO" --body "$COGNITO_USER_POOL_ID_OUT"
+# No COGNITO_USER_POOL_ID here (there used to be one) — cd.yml's
+# build-and-push-kong job self-discovers the pool via
+# cognito-idp:ListUserPools instead of reading a GitHub variable, precisely
+# so a release doesn't depend on this script's interactive local flow
+# having succeeded first. See scripts/bootstrap.sh's CognitoReadForKongConfig
+# comment for the full reasoning. `terraform output -raw
+# cognito_user_pool_id` still works for a human who wants it directly.
 
 echo "Set: AWS_DEPLOY_ROLE_ARN, TF_DEPLOY_ROLE_ARN, COGNITO_CLIENT_SECRET (secrets),"
 echo "DOMAIN_NAME, HOSTED_ZONE_NAME, TF_STATE_BUCKET, ECS_SUBNETS,"
-echo "ECS_SECURITY_GROUPS, COGNITO_CLIENT_ID, COGNITO_DOMAIN, COGNITO_USER_POOL_ID"
-echo "(variables) in the GitHub Environment '$ENVIRONMENT' (created automatically"
-echo "if it didn't already exist). COGNITO_CLIENT_ID/COGNITO_DOMAIN feed"
+echo "ECS_SECURITY_GROUPS, COGNITO_CLIENT_ID, COGNITO_DOMAIN (variables) in the"
+echo "GitHub Environment '$ENVIRONMENT' (created automatically if it didn't"
+echo "already exist). COGNITO_CLIENT_ID/COGNITO_DOMAIN feed"
 echo ".github/workflows/performance.yml (k6) — see performance/README.md."
-echo "COGNITO_USER_POOL_ID feeds cd.yml's build-and-push-kong job."
+echo "(cd.yml's build-and-push-kong job needs none of these — it self-discovers"
+echo "everything it needs from Cognito directly at deploy time.)"
 echo
 echo "Note: ECS_SUBNETS/ECS_SECURITY_GROUPS aren't actually read by any"
 echo "current workflow — they were for cd.yml's old migration-task network"

@@ -157,7 +157,27 @@ jobs:
             --task-definition "${{ steps.register.outputs.arn }}" \
             --service-connect-configuration "$SERVICE_CONNECT_CONFIG" \
             --force-new-deployment
-          aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX"
+
+          # `wait services-stable` gives up after ~10 minutes (its fixed
+          # 40 x 15s polling budget, not configurable via CLI flags). A
+          # brand-new environment's very first deploy routinely takes longer
+          # than that: Terraform creates this service (as part of the same
+          # release) before any real image exists in a freshly-emptied ECR
+          # repo, so ECS burns through several failed-pull retries before
+          # this step's own freshly-pushed image supersedes them — confirmed
+          # against a real from-scratch teardown+bootstrap+release, both for
+          # this service and for Kong's. The deployment does converge on its
+          # own; it just needs more than one wait cycle to prove it. A
+          # steady-state deploy (the common case) still finishes on the
+          # first attempt — this loop costs nothing when nothing's wrong.
+          for attempt in 1 2 3; do
+            if aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX"; then
+              exit 0
+            fi
+            echo "Still not stable after wait cycle $attempt/3 — checking again (this is expected on a service's very first deploy)."
+          done
+          echo "::error::$NAME_PREFIX did not stabilize after 3 wait cycles (~30 min) — this is past the first-deploy cold-start window, so something else is actually wrong. Check ECS service events."
+          exit 1
 
   # Kong (terraform/kong.tf) gets its own image, built fresh on every deploy
   # rather than promoted-unchanged like books-api's — its declarative config
@@ -192,10 +212,32 @@ jobs:
         id: meta
         run: echo "image=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Discover the Cognito user pool
+        # Self-discovered from AWS, not a pre-set GitHub variable. This used
+        # to read a COGNITO_USER_POOL_ID GitHub Environment variable that
+        # only scripts/bootstrap.sh's interactive local flow ever sets —
+        # confirmed the hard way that a fresh teardown+bootstrap+release
+        # cycle can reach this job with that variable never populated
+        # (nothing about a release *requires* someone to have successfully
+        # run bootstrap.sh's local flow first), which sent an empty user
+        # pool id into the JWKS URL below and got a 400 from Cognito. The
+        # pool's name is deterministic (local.name_prefix,
+        # terraform/cognito.tf), so there's nothing that actually needs
+        # wiring up by hand — CD can just ask AWS.
+        run: |
+          POOL_ID=$(aws cognito-idp list-user-pools --max-results 60 \
+            --query "UserPools[?Name=='${NAME_PREFIX}'].Id | [0]" --output text)
+          if [ -z "$POOL_ID" ] || [ "$POOL_ID" = "None" ]; then
+            echo "::error::No Cognito user pool named '$NAME_PREFIX' found — has terraform apply run for this environment yet?"
+            exit 1
+          fi
+          echo "Found user pool: $POOL_ID"
+          echo "COGNITO_USER_POOL_ID=$POOL_ID" >> "$GITHUB_ENV"
+
       - name: Fetch Cognito's JWKS
         # Public endpoint, no auth needed — just the user pool id.
         run: |
-          curl -fsS "https://cognito-idp.${AWS_REGION}.amazonaws.com/${{ vars.COGNITO_USER_POOL_ID }}/.well-known/jwks.json" \
+          curl -fsS "https://cognito-idp.${AWS_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}/.well-known/jwks.json" \
             -o ecs/kong/jwks.json
 
       - name: List consumers (name -> client_id)
@@ -206,7 +248,7 @@ jobs:
         # the prefix to get back the bare name render_config.py expects.
         run: |
           aws cognito-idp list-user-pool-clients \
-            --user-pool-id "${{ vars.COGNITO_USER_POOL_ID }}" \
+            --user-pool-id "${COGNITO_USER_POOL_ID}" \
             --query 'UserPoolClients[].{Name:ClientName,Id:ClientId}' --output json \
           | jq --arg prefix "${NAME_PREFIX}-" \
               'map({(.Name | sub("^" + $prefix; "")): .Id}) | add' \
@@ -220,16 +262,33 @@ jobs:
         # guessing wrong means Kong rejects every real token with "Invalid
         # signature" (confirmed the hard way against real staging infra).
         # Fetching one real token and reading its header's `kid` is the only
-        # reliable way to know. Uses the "default" consumer's credentials
-        # (COGNITO_CLIENT_ID/COGNITO_CLIENT_SECRET/COGNITO_DOMAIN — the same
-        # GitHub Environment secret/variables scripts/bootstrap.sh sets for
-        # performance.yml's k6 run) purely as a probe; this has nothing to
-        # do with which consumers actually get provisioned in kong.yml.
+        # reliable way to know.
+        #
+        # Everything needed for that probe is discovered here too, not read
+        # from GitHub secrets/variables — same reasoning as the user pool
+        # discovery above. The "default" consumer's client id comes straight
+        # out of consumers.json (already fetched); its secret is fetched
+        # directly from Cognito (DescribeUserPoolClient — the CD role reads
+        # it itself instead of it being copied into a separate GitHub secret
+        # that has to be kept in sync by hand); the domain is deterministic
+        # (cognito.tf: "${local.name_prefix}-${account_id}"). This has
+        # nothing to do with which consumers actually get provisioned in
+        # kong.yml — "default" is used purely because it's guaranteed to
+        # exist (var.api_consumers' own default).
         run: |
-          RESPONSE=$(curl -sS -u "${{ vars.COGNITO_CLIENT_ID }}:${{ secrets.COGNITO_CLIENT_SECRET }}" \
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          DEFAULT_CLIENT_ID=$(python3 -c "import json; print(json.load(open('ecs/kong/consumers.json'))['default'])")
+          DEFAULT_CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
+            --user-pool-id "${COGNITO_USER_POOL_ID}" --client-id "$DEFAULT_CLIENT_ID" \
+            --query 'UserPoolClient.ClientSecret' --output text)
+          RESPONSE=$(curl -sS -u "$DEFAULT_CLIENT_ID:$DEFAULT_CLIENT_SECRET" \
             -d grant_type=client_credentials -d "scope=books-api/read" \
-            "https://${{ vars.COGNITO_DOMAIN }}.auth.${AWS_REGION}.amazoncognito.com/oauth2/token")
-          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+            "https://${NAME_PREFIX}-${ACCOUNT_ID}.auth.${AWS_REGION}.amazoncognito.com/oauth2/token")
+          TOKEN=$(python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" <<<"$RESPONSE" 2>/dev/null || true)
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Failed to get a probe token from Cognito. Response: $RESPONSE"
+            exit 1
+          fi
           KID=$(echo "$TOKEN" | cut -d. -f1 | python3 -c "
           import sys, base64, json
           s = sys.stdin.read().strip()
@@ -314,4 +373,17 @@ jobs:
             --task-definition "${{ steps.register.outputs.arn }}" \
             --service-connect-configuration "$SERVICE_CONNECT_CONFIG" \
             --force-new-deployment
-          aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX-kong"
+
+          # See the plain `deploy` job's identical loop above for why this
+          # retries instead of failing on the first timeout — a brand-new
+          # environment's first-ever Kong deploy hits this every time (empty
+          # ECR repo when Terraform creates the service), confirmed directly
+          # against real staging infra.
+          for attempt in 1 2 3; do
+            if aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "$NAME_PREFIX-kong"; then
+              exit 0
+            fi
+            echo "Still not stable after wait cycle $attempt/3 — checking again (this is expected on a service's very first deploy)."
+          done
+          echo "::error::$NAME_PREFIX-kong did not stabilize after 3 wait cycles (~30 min) — this is past the first-deploy cold-start window, so something else is actually wrong. Check ECS service events."
+          exit 1

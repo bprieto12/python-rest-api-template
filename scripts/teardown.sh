@@ -66,7 +66,7 @@ This will DESTROY every AWS resource scripts/bootstrap.sh created for the
   - 4 IAM roles ($NAME_PREFIX-execution, $NAME_PREFIX-task, $NAME_PREFIX-cd, $NAME_PREFIX-terraform)
   - The GitHub Environment "$ENVIRONMENT" secrets/variables bootstrap.sh set
 $(if [ "$ENVIRONMENT" = "production" ]; then
-  echo "  - The ECR repo books-api, and any images in it (shared — deleting it also removes staging's images)"
+  echo "  - The ECR repos books-api and kong, and any images in them (shared — deleting them also removes staging's images)"
   echo "  - The state bucket ($TF_STATE_BUCKET) — ONLY if this is the last environment left in it"
 else
   echo "  (the ECR repo and the shared state bucket are left alone — production and any other environment still use them)"
@@ -125,16 +125,20 @@ else
 fi
 echo
 
-echo "== 2. ECR repo =="
+echo "== 2. ECR repos =="
 
 if [ "$ENVIRONMENT" != "production" ]; then
-  echo "Skipping — the ECR repo is shared across environments; it's only"
-  echo "deleted when tearing down production."
-elif aws ecr describe-repositories --repository-names books-api --region "$AWS_REGION" >/dev/null 2>&1; then
-  aws ecr delete-repository --repository-name books-api --region "$AWS_REGION" --force >/dev/null
-  echo "Deleted (including any images in it)"
+  echo "Skipping — both ECR repos (books-api, kong) are shared across"
+  echo "environments; they're only deleted when tearing down production."
 else
-  echo "Doesn't exist — skipping"
+  for repo in books-api kong; do
+    if aws ecr describe-repositories --repository-names "$repo" --region "$AWS_REGION" >/dev/null 2>&1; then
+      aws ecr delete-repository --repository-name "$repo" --region "$AWS_REGION" --force >/dev/null
+      echo "$repo: deleted (including any images in it)"
+    else
+      echo "$repo: doesn't exist — skipping"
+    fi
+  done
 fi
 echo
 
@@ -221,7 +225,12 @@ if [ -n "$REPO_NWO" ]; then
     gh secret delete "$s" --env "$ENVIRONMENT" --repo "$REPO_NWO" 2>/dev/null \
       && echo "$s: deleted" || echo "$s: already gone"
   done
-  for v in DOMAIN_NAME HOSTED_ZONE_NAME TF_STATE_BUCKET ECS_SUBNETS ECS_SECURITY_GROUPS COGNITO_CLIENT_ID COGNITO_DOMAIN; do
+  # COGNITO_USER_POOL_ID is included defensively, not because bootstrap.sh
+  # sets it anymore (it doesn't — cd.yml self-discovers the pool instead,
+  # see scripts/bootstrap.sh's CognitoReadForKongConfig comment) — an
+  # environment bootstrapped before that change may still have it lying
+  # around, and this cleans it up either way.
+  for v in DOMAIN_NAME HOSTED_ZONE_NAME TF_STATE_BUCKET ECS_SUBNETS ECS_SECURITY_GROUPS COGNITO_CLIENT_ID COGNITO_DOMAIN COGNITO_USER_POOL_ID; do
     gh variable delete "$v" --env "$ENVIRONMENT" --repo "$REPO_NWO" 2>/dev/null \
       && echo "$v: deleted" || echo "$v: already gone"
   done

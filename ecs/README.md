@@ -105,11 +105,18 @@ sets up and why:
   `DescribeServices` on that environment's `books-api` *and* `books-api-kong`
   services only, `iam:PassRole` for the two roles above only, push/pull on
   the `books-api` and `kong` ECR repos, and read-only
-  `cognito-idp:ListUserPoolClients` (`Resource: "*"` — a user pool's ARN is
-  opaque before the first apply, same class of gap as Cognito elsewhere in
-  this repo's IAM) so `cd.yml`'s `build-and-push-kong` job can render Kong's
-  declarative config without needing Terraform state access — not
-  `AdministratorAccess`. See `scripts/bootstrap.sh`'s `CD_POLICY` for the
-  literal policy and `terraform/README.md`'s IAM section for the equivalent
-  reasoning on the
+  `cognito-idp:ListUserPools`/`ListUserPoolClients`/`DescribeUserPoolClient`
+  (`Resource: "*"` — a user pool's ARN is opaque before the first apply,
+  same class of gap as Cognito elsewhere in this repo's IAM) so `cd.yml`'s
+  `build-and-push-kong` job can discover the pool, render Kong's declarative
+  config, and fetch one probe token — all without needing Terraform state
+  access or any pre-populated GitHub secret/variable (a fresh
+  teardown+bootstrap+release cycle showed exactly why that matters: nothing
+  about cutting a release actually requires `scripts/bootstrap.sh`'s
+  interactive local flow to have completed first, so anything CD needs has
+  to be either self-discovered like this or genuinely stable across a
+  teardown+recreate — not the case for Cognito's pool/client ids, which are
+  random on every recreation). Not `AdministratorAccess`. See
+  `scripts/bootstrap.sh`'s `CD_POLICY` for the literal policy and
+  `terraform/README.md`'s IAM section for the equivalent reasoning on the
   Terraform role.
