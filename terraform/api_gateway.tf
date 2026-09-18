@@ -1,8 +1,10 @@
 # The public entry point — everything else (ALB, ECS) is private and
 # reachable only from here, via the VPC Link below. Every request needs a
-# valid Cognito-issued JWT; there's no unauthenticated route, health checks
-# included (the ALB target group's own health check bypasses this whole
-# path entirely — it polls the ECS tasks directly, not through the gateway).
+# valid Cognito-issued JWT except the two explicit carve-outs below (the
+# docs UI and the schema it fetches — see aws_apigatewayv2_route.docs) —
+# health checks bypass this whole path entirely regardless (the ALB target
+# group's own health check polls the ECS tasks directly, not through the
+# gateway), so they were never part of this in the first place.
 
 resource "aws_apigatewayv2_api" "this" {
   name          = local.name_prefix
@@ -61,6 +63,27 @@ resource "aws_apigatewayv2_route" "default" {
   target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+# FastAPI's docs UI and the schema it fetches — deliberately public. A
+# specific route_key always wins over "$default" in HTTP API routing, so
+# these two carve themselves out of the blanket JWT requirement above
+# without touching it. No authorization_type/authorizer_id set on either
+# means "NONE" (the resource's default) — Swagger UI itself has to load
+# unauthenticated too, since it's a browser fetching these by URL, not a
+# caller that can attach a bearer token. Kong needs the equivalent carve-out
+# too (ecs/kong/render_config.py) — it re-verifies the JWT independently, so
+# leaving API Gateway's requirement off alone isn't enough.
+resource "aws_apigatewayv2_route" "docs" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "GET /docs"
+  target    = "integrations/${aws_apigatewayv2_integration.alb.id}"
+}
+
+resource "aws_apigatewayv2_route" "openapi_json" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "GET /openapi.json"
+  target    = "integrations/${aws_apigatewayv2_integration.alb.id}"
 }
 
 resource "aws_apigatewayv2_stage" "default" {

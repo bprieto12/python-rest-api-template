@@ -54,6 +54,8 @@ make lint        # ruff format --check + ruff check
 make typecheck   # mypy --strict on src/
 make fmt         # ruff format + ruff check --fix
 make seed CREATE_TABLES=1   # create the tables (local dev only) and load the mock catalogue
+make seed-staging        # load the mock catalogue into staging's real DynamoDB tables
+make seed-production     # load the mock catalogue into production's real DynamoDB tables
 ```
 
 ## Layout
@@ -113,9 +115,30 @@ an `aws login` session, which Terraform's SDK can't read).
 `scripts/teardown.sh ENVIRONMENT=<env>` reverses it for one environment at a
 time — same command shape, asks for confirmation first, and never touches
 the hosted zone/domain or the GitHub OIDC provider (see its header for
-why); the ECR repo and state bucket are shared, so they're only removed
+why); the ECR repos and state bucket are shared, so they're only removed
 when tearing down production, and only once no other environment's state
 is left.
+
+## Seeding data in a deployed environment
+
+`terraform apply` creates the DynamoDB tables empty — nothing loads the mock
+catalogue into them automatically, in staging or production. After a fresh
+bootstrap (or a teardown + re-bootstrap, which recreates the tables from
+scratch), load it with:
+
+```bash
+make seed-staging
+make seed-production
+```
+
+These are the same idempotent `scripts/seed.py` as `make seed`, just pointed
+at the real tables (`books-api-staging-{books,isbns}` /
+`books-api-{books,isbns}`) instead of DynamoDB Local — no `--create-tables`,
+since Terraform already owns those tables. They run with *your own* AWS
+credentials, not the ECS task role, so whatever you're authenticated as
+locally needs write access (`dynamodb:PutItem`/`GetItem`/etc.) to that
+environment's two tables. Override the region with `AWS_REGION=...` if
+you're not in `us-east-1`.
 
 ## Why DynamoDB, and what that trades away
 

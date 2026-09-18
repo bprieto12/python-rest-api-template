@@ -115,18 +115,37 @@ def main() -> None:
             {
                 "name": "books-api",
                 "url": f"http://{args.upstream_host}:{args.upstream_port}",
-                "routes": [{"name": "books-api-route", "paths": ["/"], "strip_path": False}],
+                "routes": [
+                    # Deliberately public — matches API Gateway's own carve-out
+                    # for these two paths (terraform/api_gateway.tf). Swagger UI
+                    # is a browser fetching these by URL, not a caller that can
+                    # attach a bearer token, so they can't require one. Kong's
+                    # router prefers a route's own more specific `paths` over
+                    # the catch-all "/" below regardless of declaration order,
+                    # so this doesn't need to come first.
+                    {"name": "books-api-public", "paths": ["/docs", "/openapi.json"], "strip_path": False},
+                    {"name": "books-api-route", "paths": ["/"], "strip_path": False},
+                ],
             }
         ],
         "consumers": [],
         "jwt_secrets": [],
-        # Global defaults: every request must carry a valid JWT (no route is
-        # left unauthenticated at Kong, mirroring API Gateway's own
-        # authorizer), and gets the default rate limit unless its consumer
-        # has an override below.
+        # Scoped to books-api-route, not global — every request through that
+        # route must carry a valid JWT (mirroring API Gateway's own
+        # authorizer) and gets the default rate limit unless its consumer has
+        # an override below. books-api-public (docs/openapi.json) picks up
+        # neither: no auth, no rate limit, by not being referenced here.
         "plugins": [
-            {"name": "jwt", "config": {"key_claim_name": "client_id", "claims_to_verify": ["exp"]}},
-            {"name": "rate-limiting", "config": {**default_limit, "policy": "local"}},
+            {
+                "name": "jwt",
+                "route": "books-api-route",
+                "config": {"key_claim_name": "client_id", "claims_to_verify": ["exp"]},
+            },
+            {
+                "name": "rate-limiting",
+                "route": "books-api-route",
+                "config": {**default_limit, "policy": "local"},
+            },
         ],
     }
 
@@ -145,6 +164,7 @@ def main() -> None:
             config["plugins"].append(
                 {
                     "name": "rate-limiting",
+                    "route": "books-api-route",
                     "consumer": name,
                     "config": {**override, "policy": "local"},
                 }
