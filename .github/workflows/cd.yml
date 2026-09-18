@@ -318,21 +318,20 @@ jobs:
         # the image is a pure function of the code at this commit, which is
         # true for books-api but not Kong: its image also bakes in *live*
         # Cognito state (consumer list, JWKS) fetched moments ago, not
-        # anything tied to the git SHA. Confirmed the hard way: a retried
-        # workflow run at the same commit (e.g. re-running after an
-        # unrelated IAM permission fix) would otherwise skip rebuilding and
-        # redeploy a stale image with a since-recreated Cognito client's old
-        # id baked in — Kong then rejects every real token with "No
-        # credentials found for given 'client_id'", even though the token
-        # itself is perfectly valid. Always rebuilding costs little; this
-        # image is small and has no compile step.
+        # anything tied to the git SHA. Skipping a rebuild here on the
+        # (mistaken) assumption that "this commit already has an image"
+        # risks redeploying a Kong image whose baked-in client ids no longer
+        # match Cognito's current ones — e.g. after Cognito gets recreated
+        # (a teardown+bootstrap cycle) without the git SHA changing, or any
+        # other case where a workflow re-runs against the same commit.
+        # Always rebuilding costs little; this image is small and has no
+        # compile step.
         run: |
           docker buildx build --push \
             --cache-from type=gha,scope=kong --cache-to type=gha,mode=max,scope=kong \
             -t "${{ steps.meta.outputs.image }}" \
             -t "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" \
             ecs/kong
-          fi
 
   deploy-kong:
     needs: [set-environment, build-and-push-kong]
