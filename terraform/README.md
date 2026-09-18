@@ -274,8 +274,12 @@ per environment, so read it there for the literal JSON. The shape:
 - **Resource-scoped by ARN** wherever the name is deterministic (everything
   keys off `$NAME_PREFIX`, so staging's role and production's role can only
   reach their *own* resources): ECS cluster/service, both DynamoDB tables,
-  the CloudWatch log group, the SNS alerts topic, the CloudWatch alarms,
-  `iam:PassRole` for the execution/task roles, and (for CD) the ECR repo.
+  the CloudWatch log groups (including the WAF one, `aws-waf-logs-$NAME_PREFIX`),
+  the SNS alerts topic, the CloudWatch alarms, the WAFv2 Web ACL (`waf.tf`
+  — a Web ACL's ARN embeds its name verbatim, `regional/webacl/<name>/<id>`,
+  so this scopes to `<name>/*` the same way AWS's own access-denied errors
+  report the resource they checked), `iam:PassRole` for the execution/task
+  roles, and (for CD) the ECR repo.
 - **Resource-scoped by an `Environment` tag/condition** where the ARN isn't
   knowable ahead of the resource existing but the API supports tag-based
   conditions anyway: ACM certificate request/describe/delete

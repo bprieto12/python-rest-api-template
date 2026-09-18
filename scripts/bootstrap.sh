@@ -313,6 +313,23 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # Resource "*" for the same opaque-ID reason as cognito-idp:* elsewhere in
 # this file (a user pool ARN isn't scopeable to $NAME_PREFIX the way e.g.
 # the ECS service ARNs above are).
+#
+# WafThisEnvironmentsWebAcl (below) is new for waf.tf: unlike Cognito's pool
+# ID, a Web ACL's ARN embeds its *name* verbatim
+# (regional/webacl/<name>/<id>), and that name is deterministic
+# ("${NAME_PREFIX}-api", set in waf.tf) even though the trailing <id> isn't
+# — so this scopes to "<name>/*", the same wildcard-the-opaque-suffix
+# pattern AWS's own CreateWebACL access-denied errors report as the
+# resource they checked against. Bundles in the web ACL's own
+# Associate/DisassociateWebACL/GetWebACLForResource (the API Gateway stage
+# it's associated with, api_gateway.tf, has no ARN of its own to scope a
+# second permission to) and PutLoggingConfiguration/
+# DeleteLoggingConfiguration/GetLoggingConfiguration for
+# aws_wafv2_web_acl_logging_configuration — not confirmed against a real
+# `apply` yet (no live AWS session while writing this), so treat an
+# AccessDenied on one of these the same as this section's closing note
+# generally: add the missing action here, it isn't a sign of something
+# deeper being wrong.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -518,7 +535,9 @@ TF_POLICY=$(cat <<JSON
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}",
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*",
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}",
-        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}:*"
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}:*",
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:aws-waf-logs-${NAME_PREFIX}",
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:aws-waf-logs-${NAME_PREFIX}:*"
       ]
     },
     {
@@ -526,6 +545,18 @@ TF_POLICY=$(cat <<JSON
       "Effect": "Allow",
       "Action": "logs:DescribeLogGroups",
       "Resource": "*"
+    },
+    {
+      "Sid": "WafThisEnvironmentsWebAcl",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:CreateWebACL", "wafv2:DeleteWebACL", "wafv2:GetWebACL", "wafv2:UpdateWebACL",
+        "wafv2:TagResource", "wafv2:UntagResource", "wafv2:ListTagsForResource",
+        "wafv2:AssociateWebACL", "wafv2:DisassociateWebACL", "wafv2:GetWebACLForResource",
+        "wafv2:PutLoggingConfiguration", "wafv2:DeleteLoggingConfiguration",
+        "wafv2:GetLoggingConfiguration"
+      ],
+      "Resource": "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/webacl/${NAME_PREFIX}-api/*"
     },
     {
       "Sid": "ApiGatewayAccessLogDelivery",
