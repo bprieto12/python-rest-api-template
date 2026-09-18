@@ -38,7 +38,7 @@ packages = ["src/books_api"]
 package = true
 
 [tool.ruff]
-line-length = 100
+line-length = 150
 target-version = "py312"
 src = ["src", "tests"]
 
