@@ -45,11 +45,6 @@ output "cognito_client_secrets" {
   value       = { for name, c in aws_cognito_user_pool_client.consumers : name => c.client_secret }
 }
 
-output "waf_web_acl_arn" {
-  description = "The WAF on the internal ALB (waf.tf) — not API Gateway, which WAFv2 can't attach to. Blocked/rate-limited requests are logged to aws_cloudwatch_log_group.waf and surfaced via AWS/WAFV2 CloudWatch metrics."
-  value       = aws_wafv2_web_acl.this.arn
-}
-
 output "alerts_topic_arn" {
   description = "Subscribe yourself: aws sns subscribe --topic-arn <this> --protocol email --notification-endpoint you@example.com"
   value       = aws_sns_topic.alerts.arn

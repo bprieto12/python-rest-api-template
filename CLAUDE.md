@@ -112,12 +112,8 @@ groups, the two DynamoDB tables, Cognito (issues OAuth2 client-credentials
 tokens, one client per consumer), API Gateway (the actual public entry
 point — a JWT authorizer checks every request against Cognito, and
 per-route `authorization_scopes` require `books-api/write` specifically for
-the mutating `books_*` routes), a WAFv2 Web ACL (`waf.tf`, attached to the
-ALB, not API Gateway — WAFv2 doesn't support HTTP APIs, only REST APIs,
-confirmed against a real `apply` — AWS Managed Rule Groups plus a
-forwarded-IP rate-based rule, evaluated after the authorizer rather than
-before), Kong (per-consumer rate limiting — API Gateway's own authorizer
-can't do that on `apigatewayv2`),
+the mutating `books_*` routes), Kong (per-consumer rate limiting — API
+Gateway's own authorizer can't do that on `apigatewayv2`),
 and the initial ECS service + task definition revisions —
 created once per environment via `terraform apply` in that environment's
 workspace (locally, or via `.github/workflows/terraform.yml`'s

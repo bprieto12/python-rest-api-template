@@ -9,10 +9,8 @@
 -->
 
 Machine-to-machine REST API on ECS Fargate, fronted by API Gateway (public
-edge: TLS, JWT auth) with a WAF on the internal ALB behind it — not on API
-Gateway itself, since WAFv2 doesn't support HTTP APIs — and Kong further
-behind that for the one thing API Gateway's HTTP API generation can't do
-natively — per-consumer rate limiting. See
+edge: TLS, JWT auth) with Kong behind it for the one thing API Gateway's
+HTTP API generation can't do natively — per-consumer rate limiting. See
 [`terraform/README.md`](terraform/README.md) for the full request-path
 writeup and the reasoning behind each hop, and [`CLAUDE.md`](CLAUDE.md) for
 the application-level architecture (routers → repository → DynamoDB).
@@ -44,8 +42,7 @@ flowchart TB
     ACM -. TLS termination .-> Edge
     Edge -. unauthenticated .-> Docs
 
-    Routes -- "VPC Link (private)" --> WAF["WAFv2 Web ACL (waf.tf)<br/>on the ALB, not API Gateway —<br/>WAFv2 doesn't support HTTP APIs<br/>Managed rule groups + forwarded-IP rate limit"]
-    WAF --> ALB["Internal ALB<br/>(alb.tf — internal = true)"]
+    Routes -- "VPC Link (private)" --> ALB["Internal ALB<br/>(alb.tf — internal = true)"]
 
     subgraph VPC["VPC — private subnets (network.tf, security_groups.tf)"]
         ALB
@@ -59,7 +56,7 @@ flowchart TB
     BooksAPI --> IsbnsTable[("DynamoDB: isbns<br/>ISBN-uniqueness pointer table")]
 
     subgraph Observability["Observability (logs.tf, alarms.tf, dashboard.tf)"]
-        Logs["CloudWatch Logs<br/>app + API Gateway access logs + WAF"]
+        Logs["CloudWatch Logs<br/>app + API Gateway access logs"]
         Alarms["CloudWatch Alarms<br/>unhealthy targets, 5xx, p99 latency, DynamoDB throttles"]
         SNS["SNS: alerts topic<br/>(subscribe yourself — nothing wired by default)"]
         Dashboard["CloudWatch Dashboard"]
@@ -69,7 +66,6 @@ flowchart TB
     end
 
     Edge -. access logs .-> Logs
-    WAF -. WAF logs .-> Logs
     BooksAPI -. traces + metrics via OTel .-> Logs
     Kong -. logs .-> Logs
     Edge -. 5xx / latency .-> Alarms

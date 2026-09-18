@@ -313,39 +313,6 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # Resource "*" for the same opaque-ID reason as cognito-idp:* elsewhere in
 # this file (a user pool ARN isn't scopeable to $NAME_PREFIX the way e.g.
 # the ECS service ARNs above are).
-#
-# WafThisEnvironmentsWebAcl (below) is new for waf.tf: unlike Cognito's pool
-# ID, a Web ACL's ARN embeds its *name* verbatim
-# (regional/webacl/<name>/<id>), and that name is deterministic
-# ("${NAME_PREFIX}-api", set in waf.tf) even though the trailing <id> isn't
-# — so this scopes to "<name>/*", the same wildcard-the-opaque-suffix
-# pattern AWS's own CreateWebACL access-denied errors report as the
-# resource they checked against. Bundles in the web ACL's own
-# Associate/DisassociateWebACL/GetWebACLForResource (the API Gateway stage
-# it's associated with, api_gateway.tf, has no ARN of its own to scope a
-# second permission to) and PutLoggingConfiguration/
-# DeleteLoggingConfiguration/GetLoggingConfiguration for
-# aws_wafv2_web_acl_logging_configuration.
-#
-# WafManagedRuleGroups (below) is a second, separate statement — confirmed
-# against a real `apply`: CreateWebACL/UpdateWebACL check permission not
-# just on the Web ACL being created but on every AWS Managed Rule Group it
-# *references* (waf.tf's three `rule` blocks). The obvious move — grant the
-# three specific ARNs waf.tf actually references
-# (regional/managedruleset/AWS/AWSManagedRulesCommonRuleSet etc.) — does
-# NOT work; confirmed against a real `apply` that still failed identically
-# with those three ARNs granted. The AccessDenied error itself names the
-# resource it actually checks as "regional/managedruleset/*/*" — a literal
-# double wildcard, not the specific vendor/name pair for whichever rule
-# group triggered it — so this action's authorization apparently doesn't
-# discriminate by which managed rule group is referenced at all. This is
-# the wafv2 equivalent of this file's other opaque-permission cases
-# (Cognito's pool ID, ACM's certificate ID): Resource: "*" in every
-# practical sense for this one statement, just narrowed to wafv2's
-# managedruleset resource type rather than the whole service. Shared across
-# every environment's Terraform role the same way
-# route53:ChangeResourceRecordSets' hosted zone is (see below) — there's no
-# `$NAME_PREFIX` in it to isolate by anyway.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -551,9 +518,7 @@ TF_POLICY=$(cat <<JSON
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}",
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/ecs/${NAME_PREFIX}:*",
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}",
-        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}:*",
-        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:aws-waf-logs-${NAME_PREFIX}",
-        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:aws-waf-logs-${NAME_PREFIX}:*"
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:/aws/apigateway/${NAME_PREFIX}:*"
       ]
     },
     {
@@ -561,24 +526,6 @@ TF_POLICY=$(cat <<JSON
       "Effect": "Allow",
       "Action": "logs:DescribeLogGroups",
       "Resource": "*"
-    },
-    {
-      "Sid": "WafThisEnvironmentsWebAcl",
-      "Effect": "Allow",
-      "Action": [
-        "wafv2:CreateWebACL", "wafv2:DeleteWebACL", "wafv2:GetWebACL", "wafv2:UpdateWebACL",
-        "wafv2:TagResource", "wafv2:UntagResource", "wafv2:ListTagsForResource",
-        "wafv2:AssociateWebACL", "wafv2:DisassociateWebACL", "wafv2:GetWebACLForResource",
-        "wafv2:PutLoggingConfiguration", "wafv2:DeleteLoggingConfiguration",
-        "wafv2:GetLoggingConfiguration"
-      ],
-      "Resource": "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/webacl/${NAME_PREFIX}-api/*"
-    },
-    {
-      "Sid": "WafManagedRuleGroups",
-      "Effect": "Allow",
-      "Action": ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"],
-      "Resource": "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/*/*"
     },
     {
       "Sid": "ApiGatewayAccessLogDelivery",

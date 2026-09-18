@@ -25,35 +25,13 @@ pre-existing deployment needs.
 ## Request path
 
 ```
-caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> WAF --> ALB (internal)
+caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal)
   --> Kong (verify JWT, per-consumer rate limit) --(ECS Service Connect)--> ECS (books-api)
 ```
 
 TLS terminates for real at API Gateway; everything after that is plain HTTP
 inside the private VPC — see "The ALB is dedicated to this one service, and
 plain HTTP" below for why.
-
-**Why WAF is on the ALB, not API Gateway (`waf.tf`):** it was originally meant
-to sit in front of the JWT authorizer, but that turned out not to be
-possible — confirmed against a real `apply`, not a design choice: WAFv2's
-`AssociateWebACL` only supports a fixed list of resource types (CloudFront,
-ALB, AppSync, Cognito, App Runner, Verified Access, and API Gateway *REST*
-APIs specifically), and HTTP APIs (`apigatewayv2`, what this project uses)
-aren't on that list — every association attempt against the API Gateway
-stage's ARN failed with "The ARN isn't valid" regardless of how the
-`$default` stage name was encoded. Migrating to a REST API just to regain
-WAF support isn't on the table — that's the same generation change
-`kong.tf` already rejected, for the same reason, just for a different
-missing feature (there, Usage Plans; here, WAF). So the Web ACL attaches to
-the ALB instead: it still inspects every request's contents (AWS Managed
-Rule Groups) and still rate-limits by real caller (a `forwarded_ip_config`-based
-rate rule, since the ALB only sees the VPC Link's IP on the raw connection,
-not the caller's — `X-Forwarded-For` is what actually carries it through
-that hop), but it no longer shields the JWT authorizer itself from
-anonymous volumetric abuse, since that traffic reaches API Gateway before
-this WAF ever sees it. Blocked/rate-limited requests are logged to
-`aws_cloudwatch_log_group.waf`, with the `Authorization` header redacted so
-a still-valid bearer token never ends up in cleartext there.
 
 `api_gateway.tf` is the only public thing here. The ALB (`alb.tf`) is
 `internal = true` specifically so this can't be bypassed — there's no way to
@@ -287,12 +265,8 @@ per environment, so read it there for the literal JSON. The shape:
 - **Resource-scoped by ARN** wherever the name is deterministic (everything
   keys off `$NAME_PREFIX`, so staging's role and production's role can only
   reach their *own* resources): ECS cluster/service, both DynamoDB tables,
-  the CloudWatch log groups (including the WAF one, `aws-waf-logs-$NAME_PREFIX`),
-  the SNS alerts topic, the CloudWatch alarms, the WAFv2 Web ACL (`waf.tf`
-  — a Web ACL's ARN embeds its name verbatim, `regional/webacl/<name>/<id>`,
-  so this scopes to `<name>/*` the same way AWS's own access-denied errors
-  report the resource they checked), `iam:PassRole` for the execution/task
-  roles, and (for CD) the ECR repo.
+  the CloudWatch log group, the SNS alerts topic, the CloudWatch alarms,
+  `iam:PassRole` for the execution/task roles, and (for CD) the ECR repo.
 - **Resource-scoped by an `Environment` tag/condition** where the ARN isn't
   knowable ahead of the resource existing but the API supports tag-based
   conditions anyway: ACM certificate request/describe/delete
@@ -305,21 +279,6 @@ per environment, so read it there for the literal JSON. The shape:
   environment's Terraform role. Nothing else about the zone (creation,
   deletion) is grantable at all, since it's looked up via `data`, never
   managed.
-- **`wafv2:CreateWebACL`/`UpdateWebACL` also need permission on
-  `regional/managedruleset/*/*`** (`WafManagedRuleGroups`) whenever the Web
-  ACL references AWS Managed Rule Groups (waf.tf's three `rule` blocks) —
-  confirmed against two real `apply` attempts, the second of which ruled out
-  the obvious narrower fix: granting the three specific
-  `regional/managedruleset/AWS/AWSManagedRulesXxx` ARNs `waf.tf` actually
-  references still failed identically, because the AccessDenied error
-  itself names the checked resource as the literal double wildcard, not the
-  specific rule group that triggered it. This action's authorization
-  apparently doesn't discriminate by which managed rule group is
-  referenced — effectively `Resource: "*"` for this one statement (like
-  Cognito/ACM's opaque-ID cases above), just narrowed to wafv2's
-  `managedruleset` resource type. Shared across every environment's role
-  the same way the hosted zone below is, since there's no `$NAME_PREFIX` in
-  it to isolate by.
 - **Still service-wide (`service:*`) on `Resource: "*"`, deliberately, not
   tightened further:** `ec2:*`, `elasticloadbalancing:*`, `apigateway:*`,
   `cognito-idp:*`. Two different reasons force this: (a) VPC/ALB/API
