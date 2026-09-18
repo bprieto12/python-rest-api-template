@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install-uv install lock fmt lint typecheck test test-unit test-integration cov run seed seed-staging seed-production up down logs docker-build performance-smoke performance-load
+.PHONY: help install-uv install lock fmt lint typecheck test test-unit test-integration cov run seed seed-staging seed-production up down logs docker-build performance-smoke performance-load architecture-diagram
 
 AWS_REGION ?= us-east-1
 
@@ -74,3 +74,6 @@ performance-smoke: ## k6 smoke test — needs `make up` running, or set BASE_URL
 
 performance-load: ## k6 load test — see performance/README.md's DynamoDB capacity note before pointing this at a deployed environment
 	k6 run performance/load.js
+
+architecture-diagram: ## Regenerate ARCHITECTURE.md's Mermaid diagram (edit scripts/generate_architecture_diagram.py, not ARCHITECTURE.md itself)
+	uv run python scripts/generate_architecture_diagram.py
