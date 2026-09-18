@@ -25,13 +25,22 @@ pre-existing deployment needs.
 ## Request path
 
 ```
-caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal)
+caller --(HTTPS + Bearer token)--> WAF --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal)
   --> Kong (verify JWT, per-consumer rate limit) --(ECS Service Connect)--> ECS (books-api)
 ```
 
 TLS terminates for real at API Gateway; everything after that is plain HTTP
 inside the private VPC — see "The ALB is dedicated to this one service, and
 plain HTTP" below for why.
+
+**Why WAF sits in front (`waf.tf`):** it's the only layer that inspects raw
+request contents — headers, query string, body — and the only one that acts
+*before* the JWT authorizer, so it's what catches both injection-shaped
+payloads (AWS Managed Rule Groups) and anonymous volumetric abuse against
+the authorizer itself (a per-IP rate-based rule) that Kong, downstream of
+auth, never even sees. Blocked/rate-limited requests are logged to
+`aws_cloudwatch_log_group.waf`, with the `Authorization` header redacted so
+a still-valid bearer token never ends up in cleartext there.
 
 `api_gateway.tf` is the only public thing here. The ALB (`alb.tf`) is
 `internal = true` specifically so this can't be bypassed — there's no way to
@@ -93,12 +102,16 @@ one (default: `"default"`, today's one real caller). See
 `../docs/RUNBOOK.md`'s "How to add a user" for adding another.
 
 Tokens are scoped (`books-api/read`, `books-api/write` — `cognito.tf`'s
-resource server) but API Gateway's authorizer here only checks that the
-token is *valid*, not which scopes it carries — every valid token can call
-every route. Enforcing scopes per-route would mean either per-route
-authorizers in `api_gateway.tf` or checking `event.requestContext.authorizer.jwt.claims.scope`
-in the app itself; neither exists yet, both are natural next steps if
-different callers should have different access.
+resource server) and API Gateway enforces which one a route needs:
+`GET /api/v1/books`/`GET /api/v1/books/{book_id}` accept either scope, while
+`POST /api/v1/books`, `PATCH /api/v1/books/{book_id}`, and
+`DELETE /api/v1/books/{book_id}` require `books-api/write` specifically
+(`aws_apigatewayv2_route.books_*` in `api_gateway.tf`, via each route's own
+`authorization_scopes` — a `read`-only token now gets a 401 from a mutating
+call). `$default` (everything else — the health probes, `/`, any future
+route not added to that list) stays audience-only, same as before scopes
+existed — so a new endpoint needs its own explicit route here to actually
+get scope enforcement, not just a new FastAPI path.
 
 The app itself (`src/books_api/`) has no idea any of this exists — enforcement
 is entirely at the gateway, so local dev (`make run`, `docker compose up`)

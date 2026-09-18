@@ -63,6 +63,78 @@ resource "aws_apigatewayv2_route" "default" {
   target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+  # No authorization_scopes here deliberately — this is the catch-all for
+  # everything *not* covered by the explicit, scoped books routes below
+  # (the health probes, "/", any future route added without updating this
+  # file), so it stays audience-only like before scopes existed.
+}
+
+# Explicit, scoped routes for the books CRUD surface. cognito.tf issues a
+# `read` and a `write` custom scope per consumer, but until these routes
+# existed nothing ever checked which scopes a given token actually carried
+# — every consumer with any valid token could call every method, including
+# the mutating ones. apigatewayv2 always prefers a literal/path-parameter
+# route over "$default" (the same rule that lets aws_apigatewayv2_route.docs
+# carve itself out above), so these take priority without touching it.
+#
+# For a JWT authorizer, `authorization_scopes` is an OR match — API Gateway
+# admits the request if the token's `scope` claim contains *at least one* of
+# the listed scopes. GET lists both scopes (a write-only consumer can still
+# read; there's no reason to also require read), the three mutating routes
+# require write specifically.
+locals {
+  books_read_scopes  = ["${aws_cognito_resource_server.this.identifier}/read", "${aws_cognito_resource_server.this.identifier}/write"]
+  books_write_scopes = ["${aws_cognito_resource_server.this.identifier}/write"]
+}
+
+resource "aws_apigatewayv2_route" "books_list" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "GET /api/v1/books"
+
+  target               = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type   = "JWT"
+  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorization_scopes = local.books_read_scopes
+}
+
+resource "aws_apigatewayv2_route" "books_get" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "GET /api/v1/books/{book_id}"
+
+  target               = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type   = "JWT"
+  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorization_scopes = local.books_read_scopes
+}
+
+resource "aws_apigatewayv2_route" "books_create" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "POST /api/v1/books"
+
+  target               = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type   = "JWT"
+  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorization_scopes = local.books_write_scopes
+}
+
+resource "aws_apigatewayv2_route" "books_update" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "PATCH /api/v1/books/{book_id}"
+
+  target               = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type   = "JWT"
+  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorization_scopes = local.books_write_scopes
+}
+
+resource "aws_apigatewayv2_route" "books_delete" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "DELETE /api/v1/books/{book_id}"
+
+  target               = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type   = "JWT"
+  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorization_scopes = local.books_write_scopes
 }
 
 # FastAPI's docs UI and the schema it fetches — deliberately public. A
