@@ -325,11 +325,20 @@ TF_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$TF_ROLE_NAME"
 # it's associated with, api_gateway.tf, has no ARN of its own to scope a
 # second permission to) and PutLoggingConfiguration/
 # DeleteLoggingConfiguration/GetLoggingConfiguration for
-# aws_wafv2_web_acl_logging_configuration — not confirmed against a real
-# `apply` yet (no live AWS session while writing this), so treat an
-# AccessDenied on one of these the same as this section's closing note
-# generally: add the missing action here, it isn't a sign of something
-# deeper being wrong.
+# aws_wafv2_web_acl_logging_configuration.
+#
+# WafManagedRuleGroups (below) is a second, separate statement — confirmed
+# against a real `apply`: CreateWebACL/UpdateWebACL check permission not
+# just on the Web ACL being created but on every AWS Managed Rule Group it
+# *references* (waf.tf's three `rule` blocks), each its own IAM resource
+# type (regional/managedruleset/<vendor>/<name>) with no relation to
+# $NAME_PREFIX at all — these are AWS-vendored rule sets, shared across
+# every environment the same way route53:ChangeResourceRecordSets' hosted
+# zone is (see below), not something to fold into the per-environment
+# statement above. Hand-picked to the three rule groups waf.tf actually
+# uses rather than a `managedruleset/*/*` wildcard — add a fourth ARN here
+# if waf.tf ever references another one, same as every other resource-scoped
+# statement in this file.
 CD_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
@@ -557,6 +566,16 @@ TF_POLICY=$(cat <<JSON
         "wafv2:GetLoggingConfiguration"
       ],
       "Resource": "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/webacl/${NAME_PREFIX}-api/*"
+    },
+    {
+      "Sid": "WafManagedRuleGroups",
+      "Effect": "Allow",
+      "Action": ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"],
+      "Resource": [
+        "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/AWS/AWSManagedRulesCommonRuleSet",
+        "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/AWS/AWSManagedRulesKnownBadInputsRuleSet",
+        "arn:aws:wafv2:$AWS_REGION:$ACCOUNT_ID:regional/managedruleset/AWS/AWSManagedRulesSQLiRuleSet"
+      ]
     },
     {
       "Sid": "ApiGatewayAccessLogDelivery",

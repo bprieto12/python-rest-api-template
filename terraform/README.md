@@ -292,6 +292,14 @@ per environment, so read it there for the literal JSON. The shape:
   environment's Terraform role. Nothing else about the zone (creation,
   deletion) is grantable at all, since it's looked up via `data`, never
   managed.
+- **`wafv2:CreateWebACL`/`UpdateWebACL` also need permission on every AWS
+  Managed Rule Group the Web ACL references** (`WafManagedRuleGroups`) —
+  confirmed against a real `apply`, not just inferred: each managed rule
+  group is its own IAM resource type
+  (`regional/managedruleset/<vendor>/<name>`), unrelated to `$NAME_PREFIX`,
+  so — like the hosted zone above — this is shared across every
+  environment's role rather than scoped per-environment. Hand-picked to the
+  three rule groups `waf.tf` actually references, not a wildcard.
 - **Still service-wide (`service:*`) on `Resource: "*"`, deliberately, not
   tightened further:** `ec2:*`, `elasticloadbalancing:*`, `apigateway:*`,
   `cognito-idp:*`. Two different reasons force this: (a) VPC/ALB/API
