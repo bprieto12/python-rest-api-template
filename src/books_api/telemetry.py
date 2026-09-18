@@ -72,15 +72,9 @@ def setup_telemetry(settings: Settings) -> None:
 
     readers: list[MetricReader] = []
     if has_otlp:
-        readers.append(
-            PeriodicExportingMetricReader(
-                _metric_exporter(settings), export_interval_millis=interval
-            )
-        )
+        readers.append(PeriodicExportingMetricReader(_metric_exporter(settings), export_interval_millis=interval))
     if settings.otel_console_export or not has_otlp:
-        readers.append(
-            PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=interval)
-        )
+        readers.append(PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=interval))
     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=readers))
 
     tracer_provider = TracerProvider(resource=resource)

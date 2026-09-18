@@ -31,9 +31,7 @@ async def list_books(
     author: str | None = None,
     q: Annotated[str | None, Query(description="Full-text-ish match on title/description")] = None,
 ) -> BookPage:
-    rows, total = await repository.list_books(
-        tables, limit=limit, offset=offset, genre=genre, author=author, q=q
-    )
+    rows, total = await repository.list_books(tables, limit=limit, offset=offset, genre=genre, author=author, q=q)
     return BookPage(
         items=[BookRead.model_validate(row) for row in rows],
         total=total,

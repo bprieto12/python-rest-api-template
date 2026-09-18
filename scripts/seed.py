@@ -28,9 +28,7 @@ _CONNECT_RETRY_DELAY_S = 1  # connections yet by the time this runs (docker comp
 
 async def _create_tables(settings: Settings) -> None:
     session = aioboto3.Session(region_name=settings.aws_region)
-    async with session.resource(
-        "dynamodb", endpoint_url=settings.dynamodb_endpoint_url
-    ) as dynamodb:
+    async with session.resource("dynamodb", endpoint_url=settings.dynamodb_endpoint_url) as dynamodb:
         for attempt in range(1, _CONNECT_RETRIES + 1):
             try:
                 await dynamodb.meta.client.list_tables(Limit=1)

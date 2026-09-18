@@ -22,9 +22,7 @@ def test_book_item_omits_unset_optional_fields() -> None:
         "published_year": None,
         "description": None,
     }
-    item = _book_item(
-        1, data, created_at="2024-01-01T00:00:00+00:00", updated_at="2024-01-01T00:00:00+00:00"
-    )
+    item = _book_item(1, data, created_at="2024-01-01T00:00:00+00:00", updated_at="2024-01-01T00:00:00+00:00")
     assert "genre" not in item
     assert "published_year" not in item
     assert "description" not in item
@@ -42,9 +40,7 @@ def test_book_item_includes_optional_fields_when_set() -> None:
         "published_year": 1965,
         "description": "Sci-fi classic.",
     }
-    item = _book_item(
-        1, data, created_at="2024-01-01T00:00:00+00:00", updated_at="2024-01-01T00:00:00+00:00"
-    )
+    item = _book_item(1, data, created_at="2024-01-01T00:00:00+00:00", updated_at="2024-01-01T00:00:00+00:00")
     assert item["genre"] == "science fiction"
     assert item["published_year"] == 1965
     assert item["description"] == "Sci-fi classic."

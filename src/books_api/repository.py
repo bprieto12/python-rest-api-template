@@ -63,9 +63,7 @@ def _from_item(item: dict[str, Any]) -> Book:
     )
 
 
-def _book_item(
-    book_id: int, data: dict[str, Any], *, created_at: str, updated_at: str
-) -> dict[str, Any]:
+def _book_item(book_id: int, data: dict[str, Any], *, created_at: str, updated_at: str) -> dict[str, Any]:
     """Build a DynamoDB item, omitting unset optional fields rather than storing NULLs."""
     item: dict[str, Any] = {
         "id": book_id,
@@ -128,11 +126,7 @@ async def list_books(
         books = [b for b in books if needle in b.author.lower()]
     if q:
         needle = q.lower()
-        books = [
-            b
-            for b in books
-            if needle in b.title.lower() or (b.description and needle in b.description.lower())
-        ]
+        books = [b for b in books if needle in b.title.lower() or (b.description and needle in b.description.lower())]
 
     books.sort(key=lambda b: (b.title, b.id))
     total = len(books)
@@ -173,9 +167,7 @@ async def create_book(tables: Tables, data: BookCreate) -> Book:
         raise
 
     try:
-        await tables.books.put_item(
-            Item=_book_item(book_id, payload, created_at=now, updated_at=now)
-        )
+        await tables.books.put_item(Item=_book_item(book_id, payload, created_at=now, updated_at=now))
     except Exception:
         # Best-effort compensation: don't leave the ISBN permanently claimed
         # by a book that was never actually created.
@@ -216,9 +208,7 @@ async def update_book(tables: Tables, book: Book, data: BookUpdate) -> Book:
     return updated
 
 
-async def _apply_update(
-    tables: Tables, book_id: int, changes: dict[str, Any], *, updated_at: str
-) -> None:
+async def _apply_update(tables: Tables, book_id: int, changes: dict[str, Any], *, updated_at: str) -> None:
     changes = {**changes, "updated_at": updated_at}
     set_parts: list[str] = []
     remove_parts: list[str] = []

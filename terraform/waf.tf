@@ -1,26 +1,34 @@
-# Perimeter WAF in front of API Gateway — the one layer that inspects raw
-# request contents (headers, query string, body) *before* anything else in
-# the path gets a chance to reject it. Everything downstream already
-# authenticates (Cognito JWT, api_gateway.tf) and rate-limits per-consumer
-# (Kong, kong.tf), but neither of those helps with:
-#   - injection-shaped payloads: repository.py builds DynamoDB
-#     FilterExpressions from raw query params (author/q) rather than a
-#     parameterized driver call — the managed rule groups below are the
-#     layer that actually inspects for that, independent of what the app
-#     code does with the value afterward.
-#   - anonymous volumetric abuse: Kong never sees a request that fails API
-#     Gateway's JWT authorizer, so a flood of invalid-token requests against
-#     the (comparatively expensive) authorizer itself is invisible to Kong's
-#     rate limiting entirely. The rate-based rule below is what catches that,
-#     upstream of the authorizer.
+# WAF attached to the internal ALB (alb.tf) — NOT to API Gateway, even
+# though API Gateway is this service's actual public entry point.
+# Confirmed against a real `apply`, not a design choice: AWS WAFv2's
+# AssociateWebACL only supports a fixed list of resource types (CloudFront,
+# ALB, AppSync, Cognito, App Runner, Verified Access, and API Gateway REST
+# APIs specifically) — HTTP APIs (apigatewayv2, api_gateway.tf's
+# protocol_type = "HTTP") aren't on that list at all. Every attempt to
+# associate this Web ACL with the API Gateway stage's ARN failed with "The
+# ARN isn't valid" regardless of how the "$default" stage name was encoded
+# — that error is WAFv2 rejecting the whole /apis/.../stages/... shape, not
+# a quoting problem. Migrating to a REST API (v1) just to regain WAF
+# support isn't on the table here — that's the exact same generation
+# change kong.tf's own doc comment already rejected, for the same "not
+# worth it for one feature" reason (there, Usage Plans; here, WAF).
 #
-# scope = REGIONAL, not CLOUDFRONT — this attaches to a regional HTTP API
-# (api_gateway.tf), not a CloudFront distribution, so unlike a
-# CLOUDFRONT-scope ACL (always us-east-1, regardless of the distribution's
-# origin region) this must be created in the same region as the API itself.
+# The real consequence of sitting on the ALB instead: this evaluates
+# traffic AFTER API Gateway's JWT authorizer, not before. It still
+# inspects every request's contents (the managed rule groups below) and
+# still rate-limits by real caller (the forwarded_ip_config on
+# RateLimitPerIp, below), but it no longer shields the authorizer itself
+# from a flood of anonymous/invalid-token requests — API Gateway would eat
+# that cost before this WAF ever sees the request. Kong (kong.tf) still
+# fills the one gap neither of these covers: per-consumer rate limiting.
+#
+# scope = REGIONAL, not CLOUDFRONT — this attaches to a regional ALB
+# (alb.tf), not a CloudFront distribution, so unlike a CLOUDFRONT-scope ACL
+# (always us-east-1, regardless of the distribution's origin region) this
+# must be created in the same region as the ALB itself.
 resource "aws_wafv2_web_acl" "this" {
   name        = "${local.name_prefix}-api"
-  description = "Perimeter WAF for the ${local.name_prefix} API Gateway."
+  description = "WAF for the ${local.name_prefix} ALB, protecting the books-api request path behind it."
   scope       = "REGIONAL"
 
   default_action {
@@ -97,13 +105,26 @@ resource "aws_wafv2_web_acl" "this" {
     }
   }
 
-  # Pre-auth volumetric abuse: more than var.waf_rate_limit_per_5min requests
-  # from one IP in WAF's fixed rolling 5-minute window (not configurable —
-  # that window length is intrinsic to rate_based_statement, only the limit
-  # is) gets blocked here, before it ever reaches the JWT authorizer.
-  # Deliberately generous — this is abuse protection sitting in front of
-  # every consumer combined, not the per-consumer quota Kong already owns
-  # downstream (ecs/kong/rate-limits.<environment>.json).
+  # Volumetric abuse from one real caller: more than var.waf_rate_limit_per_5min
+  # requests in WAF's fixed rolling 5-minute window (not configurable — that
+  # window length is intrinsic to rate_based_statement, only the limit is)
+  # gets blocked here. Deliberately generous — this is abuse protection
+  # sitting in front of every consumer combined, not the per-consumer quota
+  # Kong already owns downstream (ecs/kong/rate-limits.<environment>.json).
+  #
+  # forwarded_ip_config is required here, not optional: this Web ACL is on
+  # the ALB (see the module-level comment above for why), which every
+  # request reaches via API Gateway's VPC Link — a private hop, so the raw
+  # TCP source IP the ALB actually sees is the VPC Link's own ENI, not the
+  # original caller's, and aggregate_key_type = "IP" would key every
+  # request in this rule to that same handful of addresses instead of
+  # distinguishing real callers. X-Forwarded-For is what actually carries
+  # the caller's IP through that hop (API Gateway's HTTP_PROXY integration
+  # sets it, same as any L7 proxy would). fallback_behavior = "MATCH" (i.e.
+  # treat a missing/malformed header as a match, and count it toward the
+  # limit) errs toward not silently disabling this rule if that header is
+  # ever absent, at the cost of an unusual request being rate-limited
+  # alongside everyone else sharing that fallback bucket.
   rule {
     name     = "RateLimitPerIp"
     priority = 3
@@ -115,7 +136,12 @@ resource "aws_wafv2_web_acl" "this" {
     statement {
       rate_based_statement {
         limit              = var.waf_rate_limit_per_5min
-        aggregate_key_type = "IP"
+        aggregate_key_type = "FORWARDED_IP"
+
+        forwarded_ip_config {
+          header_name       = "X-Forwarded-For"
+          fallback_behavior = "MATCH"
+        }
       }
     }
 
@@ -133,20 +159,12 @@ resource "aws_wafv2_web_acl" "this" {
   }
 }
 
-# Attaches to the API Gateway *stage*, not the API itself — that's the
-# resource_arn shape aws_wafv2_web_acl_association expects for an HTTP API
-# (.../apis/<api-id>/stages/<stage-name>).
-#
-# aws_apigatewayv2_stage.default.arn is NOT used as-is, deliberately — this
-# stage's name is the literal string "$default" (api_gateway.tf), and
-# WAFv2's own ARN parameter validation rejects the raw "$" character
-# outright (confirmed against a real `apply`: "The ARN isn't valid" on
-# exactly this resource_arn, even though it's a completely valid API
-# Gateway stage ARN — apigatewayv2's own APIs accept "$default" unencoded
-# everywhere else). The fix is percent-encoding just that one character —
-# WAFv2 accepts "%24default" in its place, same ARN otherwise.
+# Attaches to the ALB itself (alb.tf) — see the module-level comment above
+# for why this isn't the API Gateway stage. For WAFv2's ALB resource type,
+# resource_arn is just the load balancer's own ARN, no listener or target
+# group involved.
 resource "aws_wafv2_web_acl_association" "this" {
-  resource_arn = replace(aws_apigatewayv2_stage.default.arn, "$default", "%24default")
+  resource_arn = aws_lb.this.arn
   web_acl_arn  = aws_wafv2_web_acl.this.arn
 }
 

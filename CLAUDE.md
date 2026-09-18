@@ -113,9 +113,11 @@ tokens, one client per consumer), API Gateway (the actual public entry
 point — a JWT authorizer checks every request against Cognito, and
 per-route `authorization_scopes` require `books-api/write` specifically for
 the mutating `books_*` routes), a WAFv2 Web ACL (`waf.tf`, attached to the
-API Gateway stage, ahead of the authorizer — AWS Managed Rule Groups plus a
-per-IP rate-based rule for pre-auth abuse), Kong (per-consumer rate
-limiting — API Gateway's own authorizer can't do that on `apigatewayv2`),
+ALB, not API Gateway — WAFv2 doesn't support HTTP APIs, only REST APIs,
+confirmed against a real `apply` — AWS Managed Rule Groups plus a
+forwarded-IP rate-based rule, evaluated after the authorizer rather than
+before), Kong (per-consumer rate limiting — API Gateway's own authorizer
+can't do that on `apigatewayv2`),
 and the initial ECS service + task definition revisions —
 created once per environment via `terraform apply` in that environment's
 workspace (locally, or via `.github/workflows/terraform.yml`'s

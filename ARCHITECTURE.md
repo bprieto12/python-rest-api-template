@@ -9,12 +9,13 @@
 -->
 
 Machine-to-machine REST API on ECS Fargate, fronted by API Gateway (public
-edge: TLS, WAF, JWT auth) with Kong behind it for the one thing API
-Gateway's HTTP API generation can't do natively — per-consumer rate
-limiting. See [`terraform/README.md`](terraform/README.md) for the full
-request-path writeup and the reasoning behind each hop, and
-[`CLAUDE.md`](CLAUDE.md) for the application-level architecture
-(routers → repository → DynamoDB).
+edge: TLS, JWT auth) with a WAF on the internal ALB behind it — not on API
+Gateway itself, since WAFv2 doesn't support HTTP APIs — and Kong further
+behind that for the one thing API Gateway's HTTP API generation can't do
+natively — per-consumer rate limiting. See
+[`terraform/README.md`](terraform/README.md) for the full request-path
+writeup and the reasoning behind each hop, and [`CLAUDE.md`](CLAUDE.md) for
+the application-level architecture (routers → repository → DynamoDB).
 
 ```mermaid
 flowchart TB
@@ -30,13 +31,12 @@ flowchart TB
     Route53["Route 53<br/>custom domain (route53.tf)"]
     ACM["ACM certificate<br/>(acm.tf)"]
 
-    subgraph Edge["API Gateway — the public entry point (api_gateway.tf, waf.tf)"]
+    subgraph Edge["API Gateway — the public entry point (api_gateway.tf)"]
         direction TB
-        WAF["WAFv2 Web ACL<br/>Managed rule groups + per-IP rate limit"]
         Authorizer["JWT Authorizer<br/>validates aud / issuer against Cognito"]
         Routes["Per-route scopes<br/>GET: read or write · POST/PATCH/DELETE: write"]
         Docs["/docs, /openapi.json<br/>(public, no auth)"]
-        WAF --> Authorizer --> Routes
+        Authorizer --> Routes
     end
 
     Caller -- "3 . HTTPS + Bearer token" --> Route53
@@ -44,7 +44,8 @@ flowchart TB
     ACM -. TLS termination .-> Edge
     Edge -. unauthenticated .-> Docs
 
-    Routes -- "VPC Link (private)" --> ALB["Internal ALB<br/>(alb.tf — internal = true)"]
+    Routes -- "VPC Link (private)" --> WAF["WAFv2 Web ACL (waf.tf)<br/>on the ALB, not API Gateway —<br/>WAFv2 doesn't support HTTP APIs<br/>Managed rule groups + forwarded-IP rate limit"]
+    WAF --> ALB["Internal ALB<br/>(alb.tf — internal = true)"]
 
     subgraph VPC["VPC — private subnets (network.tf, security_groups.tf)"]
         ALB
@@ -67,7 +68,8 @@ flowchart TB
         Alarms --> Dashboard
     end
 
-    Edge -. access + WAF logs .-> Logs
+    Edge -. access logs .-> Logs
+    WAF -. WAF logs .-> Logs
     BooksAPI -. traces + metrics via OTel .-> Logs
     Kong -. logs .-> Logs
     Edge -. 5xx / latency .-> Alarms

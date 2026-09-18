@@ -25,7 +25,7 @@ pre-existing deployment needs.
 ## Request path
 
 ```
-caller --(HTTPS + Bearer token)--> WAF --(JWT authorizer)--> VPC Link --(HTTP, private)--> ALB (internal)
+caller --(HTTPS + Bearer token)--> API Gateway --(JWT authorizer)--> VPC Link --(HTTP, private)--> WAF --> ALB (internal)
   --> Kong (verify JWT, per-consumer rate limit) --(ECS Service Connect)--> ECS (books-api)
 ```
 
@@ -33,12 +33,25 @@ TLS terminates for real at API Gateway; everything after that is plain HTTP
 inside the private VPC — see "The ALB is dedicated to this one service, and
 plain HTTP" below for why.
 
-**Why WAF sits in front (`waf.tf`):** it's the only layer that inspects raw
-request contents — headers, query string, body — and the only one that acts
-*before* the JWT authorizer, so it's what catches both injection-shaped
-payloads (AWS Managed Rule Groups) and anonymous volumetric abuse against
-the authorizer itself (a per-IP rate-based rule) that Kong, downstream of
-auth, never even sees. Blocked/rate-limited requests are logged to
+**Why WAF is on the ALB, not API Gateway (`waf.tf`):** it was originally meant
+to sit in front of the JWT authorizer, but that turned out not to be
+possible — confirmed against a real `apply`, not a design choice: WAFv2's
+`AssociateWebACL` only supports a fixed list of resource types (CloudFront,
+ALB, AppSync, Cognito, App Runner, Verified Access, and API Gateway *REST*
+APIs specifically), and HTTP APIs (`apigatewayv2`, what this project uses)
+aren't on that list — every association attempt against the API Gateway
+stage's ARN failed with "The ARN isn't valid" regardless of how the
+`$default` stage name was encoded. Migrating to a REST API just to regain
+WAF support isn't on the table — that's the same generation change
+`kong.tf` already rejected, for the same reason, just for a different
+missing feature (there, Usage Plans; here, WAF). So the Web ACL attaches to
+the ALB instead: it still inspects every request's contents (AWS Managed
+Rule Groups) and still rate-limits by real caller (a `forwarded_ip_config`-based
+rate rule, since the ALB only sees the VPC Link's IP on the raw connection,
+not the caller's — `X-Forwarded-For` is what actually carries it through
+that hop), but it no longer shields the JWT authorizer itself from
+anonymous volumetric abuse, since that traffic reaches API Gateway before
+this WAF ever sees it. Blocked/rate-limited requests are logged to
 `aws_cloudwatch_log_group.waf`, with the `Authorization` header redacted so
 a still-valid bearer token never ends up in cleartext there.
 

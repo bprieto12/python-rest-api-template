@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install-uv install lock fmt lint typecheck test test-unit test-integration cov run seed seed-staging seed-production up down logs docker-build performance-smoke performance-load architecture-diagram
+.PHONY: help install-uv install lock fmt lint typecheck test test-unit test-integration cov run seed seed-staging seed-production up down logs docker-build performance-smoke performance-load architecture-diagram install-hooks
 
 AWS_REGION ?= us-east-1
 
@@ -19,6 +19,9 @@ lock: ## Regenerate uv.lock after editing pyproject.toml
 fmt: ## Autoformat + autofix with ruff
 	uv run ruff format .
 	uv run ruff check --fix .
+
+install-hooks: ## One-time setup: install the git pre-commit hook (.pre-commit-config.yaml) so `make fmt`'s checks run automatically on every commit
+	uv run pre-commit install
 
 lint: ## Lint (ruff) without fixing
 	uv run ruff format --check .

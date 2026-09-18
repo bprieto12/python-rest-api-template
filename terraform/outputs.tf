@@ -46,7 +46,7 @@ output "cognito_client_secrets" {
 }
 
 output "waf_web_acl_arn" {
-  description = "The perimeter WAF in front of API Gateway (waf.tf). Blocked/rate-limited requests are logged to aws_cloudwatch_log_group.waf and surfaced via AWS/WAFV2 CloudWatch metrics."
+  description = "The WAF on the internal ALB (waf.tf) — not API Gateway, which WAFv2 can't attach to. Blocked/rate-limited requests are logged to aws_cloudwatch_log_group.waf and surfaced via AWS/WAFV2 CloudWatch metrics."
   value       = aws_wafv2_web_acl.this.arn
 }
 

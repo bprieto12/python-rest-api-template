@@ -1,0 +1,25 @@
+# Runs the same two commands `make fmt` does, automatically, before every
+# commit — ruff-format then ruff check --fix, so formatting/lint-autofixes
+# never need a manual `make fmt` pass first.
+#
+# One-time setup per clone: `make install-hooks` (uv run pre-commit install).
+# Without that, this file does nothing on its own — pre-commit only runs
+# once its hooks are actually installed into .git/hooks, same as any other
+# git hook.
+#
+# rev is pinned to v0.16.7, matching uv.lock's resolved `ruff` version
+# exactly (ruff-pre-commit tags its releases 1:1 with ruff's own version
+# numbers) — deliberately not "latest", so this hook formats identically to
+# `uv run ruff` instead of silently drifting to whatever ruff release is
+# newest. Bump both together when `uv lock` picks up a new ruff.
+#
+# If a hook actually reformats/autofixes a file, pre-commit reports that
+# run as failed and aborts the commit — that's expected, not a bug: review
+# what changed, `git add` it, and commit again.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        args: [--fix]

@@ -16,9 +16,7 @@ async def test_create_and_fetch(client: AsyncClient, sample_book: dict[str, obje
     assert fetched.json() == body
 
 
-async def test_duplicate_isbn_is_conflict(
-    client: AsyncClient, sample_book: dict[str, object]
-) -> None:
+async def test_duplicate_isbn_is_conflict(client: AsyncClient, sample_book: dict[str, object]) -> None:
     assert (await client.post("/api/v1/books", json=sample_book)).status_code == 201
     dup = await client.post("/api/v1/books", json=sample_book)
     assert dup.status_code == 409

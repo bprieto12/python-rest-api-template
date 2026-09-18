@@ -65,9 +65,7 @@ async def dynamodb(moto_endpoint: str) -> AsyncIterator[DynamoDB]:
         )
         await isbns.wait_until_exists()
         try:
-            yield DynamoDB(
-                resource_cm=None, resource=resource, tables=Tables(books=books, isbns=isbns)
-            )
+            yield DynamoDB(resource_cm=None, resource=resource, tables=Tables(books=books, isbns=isbns))
         finally:
             await books.delete()
             await isbns.delete()

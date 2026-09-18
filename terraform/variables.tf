@@ -45,7 +45,7 @@ variable "api_consumers" {
 }
 
 variable "waf_rate_limit_per_5min" {
-  description = "Requests from a single IP allowed in WAF's rolling 5-minute window (waf.tf) before that IP is blocked at the perimeter, ahead of the JWT authorizer. This is pre-auth abuse protection for the API as a whole, not a per-consumer quota — that's Kong's job (kong_desired_count/rate-limits.<environment>.json). 3000/5min (~10 req/s sustained) is deliberately generous; AWS's own minimum for this argument is 100."
+  description = "Requests from a single real caller (via X-Forwarded-For, since this WAF sits on the ALB behind API Gateway's VPC Link — see waf.tf) allowed in WAF's rolling 5-minute window before that caller is blocked. This is abuse protection for the API as a whole, not a per-consumer quota — that's Kong's job (kong_desired_count/rate-limits.<environment>.json). 3000/5min (~10 req/s sustained) is deliberately generous; AWS's own minimum for this argument is 100."
   type        = number
   default     = 3000
 }
