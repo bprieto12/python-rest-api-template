@@ -123,7 +123,11 @@ def main() -> None:
                     # router prefers a route's own more specific `paths` over
                     # the catch-all "/" below regardless of declaration order,
                     # so this doesn't need to come first.
-                    {"name": "books-api-public", "paths": ["/docs", "/openapi.json"], "strip_path": False},
+                    {
+                        "name": "books-api-public",
+                        "paths": ["/docs", "/openapi.json"],
+                        "strip_path": False,
+                    },
                     {"name": "books-api-route", "paths": ["/"], "strip_path": False},
                 ],
             }
