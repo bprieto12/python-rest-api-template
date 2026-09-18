@@ -110,9 +110,13 @@ migration a pre-existing (pre-workspace) deployment needs.
 dedicated VPC, the ECS cluster, an *internal* ALB (with ACM cert), target
 groups, the two DynamoDB tables, Cognito (issues OAuth2 client-credentials
 tokens, one client per consumer), API Gateway (the actual public entry
-point — a JWT authorizer checks every request against Cognito), Kong
-(per-consumer rate limiting — API Gateway's own authorizer can't do that on
-`apigatewayv2`), and the initial ECS service + task definition revisions —
+point — a JWT authorizer checks every request against Cognito, and
+per-route `authorization_scopes` require `books-api/write` specifically for
+the mutating `books_*` routes), a WAFv2 Web ACL (`waf.tf`, attached to the
+API Gateway stage, ahead of the authorizer — AWS Managed Rule Groups plus a
+per-IP rate-based rule for pre-auth abuse), Kong (per-consumer rate
+limiting — API Gateway's own authorizer can't do that on `apigatewayv2`),
+and the initial ECS service + task definition revisions —
 created once per environment via `terraform apply` in that environment's
 workspace (locally, or via `.github/workflows/terraform.yml`'s
 `workflow_dispatch`), not something CD re-applies; CD only registers new

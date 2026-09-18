@@ -395,13 +395,14 @@ doesn't show up as an API Gateway-level rejection).
    ```
 
 Two things worth knowing, not just assuming:
-- **Scopes aren't enforced per-route yet.** `books-api/read` and
-  `books-api/write` both exist and get embedded in the token, but the API
-  Gateway authorizer here only checks that the token is *valid* — any valid
-  token can call any route regardless of which scope it requested. Request
-  the narrower scope anyway if you only need read access — it's forward
-  compatible with enforcement being added later, it just isn't enforced
-  today.
+- **Scopes are enforced per-route.** `books-api/read` and `books-api/write`
+  both get embedded in the token, and API Gateway checks which one a route
+  actually needs (`terraform/api_gateway.tf`'s `aws_apigatewayv2_route.books_*`):
+  the two `GET` routes accept either scope, while `POST`/`PATCH`/`DELETE`
+  require `books-api/write`. A `read`-only token gets a 401 from a mutating
+  call. Request the narrower scope if you only need read access — beyond
+  being good practice, it's now the difference between a token that can and
+  can't mutate data.
 - **Tokens expire** — Cognito's default access token lifetime (1 hour; not
   explicitly configured in `cognito.tf`, so this is AWS's stock default, not
   a value someone chose). Fetch a new one when requests start getting
